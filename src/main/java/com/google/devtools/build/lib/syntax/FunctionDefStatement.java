@@ -15,8 +15,6 @@ package com.google.devtools.build.lib.syntax;
 
 import com.google.common.collect.ImmutableList;
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Syntax node for a function definition.
@@ -36,36 +34,6 @@ public final class FunctionDefStatement extends Statement {
     this.parameters = ImmutableList.copyOf(parameters);
     this.signature = signature;
     this.statements = ImmutableList.copyOf(statements);
-  }
-
-  @Override
-  void doExec(Environment env) throws EvalException, InterruptedException {
-    List<Expression> defaultExpressions = signature.getDefaultValues();
-    ArrayList<Object> defaultValues = null;
-
-    if (defaultExpressions != null) {
-      defaultValues = new ArrayList<>(defaultExpressions.size());
-      for (Expression expr : defaultExpressions) {
-        defaultValues.add(expr.eval(env));
-      }
-    }
-
-    FunctionSignature sig = signature.getSignature();
-    if (env.getSemantics().incompatibleDisallowKeywordOnlyArgs
-        && sig.getShape().getMandatoryNamedOnly() > 0) {
-      throw new EvalException(
-          getLocation(),
-          "Keyword-only argument is forbidden. You can temporarily disable this "
-              + "error using the flag --incompatible_disallow_keyword_only_args=false");
-    }
-
-    env.update(
-        identifier.getName(),
-        new UserDefinedFunction(
-            identifier,
-            FunctionSignature.WithValues.create(sig, defaultValues, /*types=*/null),
-            statements,
-            env.getGlobals()));
   }
 
   @Override
@@ -111,34 +79,7 @@ public final class FunctionDefStatement extends Statement {
   }
 
   @Override
-  void validate(final ValidationEnvironment env) throws EvalException {
-    ValidationEnvironment localEnv = new ValidationEnvironment(env);
-    FunctionSignature sig = signature.getSignature();
-    FunctionSignature.Shape shape = sig.getShape();
-    ImmutableList<String> names = sig.getNames();
-    List<Expression> defaultExpressions = signature.getDefaultValues();
-
-    int positionals = shape.getPositionals();
-    int mandatoryPositionals = shape.getMandatoryPositionals();
-    int namedOnly = shape.getNamedOnly();
-    int mandatoryNamedOnly = shape.getMandatoryNamedOnly();
-    boolean starArg = shape.hasStarArg();
-    boolean kwArg = shape.hasKwArg();
-    int named = positionals + namedOnly;
-    int args = named + (starArg ? 1 : 0) + (kwArg ? 1 : 0);
-    int startOptionals = mandatoryPositionals;
-    int endOptionals = named - mandatoryNamedOnly;
-
-    int j = 0; // index for the defaultExpressions
-    for (int i = 0; i < args; i++) {
-      String name = names.get(i);
-      if (startOptionals <= i && i < endOptionals) {
-        defaultExpressions.get(j++).validate(env);
-      }
-      localEnv.declare(name, getLocation());
-    }
-    for (Statement stmts : statements) {
-      stmts.validate(localEnv);
-    }
+  public Kind kind() {
+    return Kind.FUNCTION_DEF;
   }
 }

@@ -26,8 +26,8 @@ public final class IfStatement extends Statement {
   /**
    * Syntax node for an [el]if statement.
    *
-   * <p>This extends Statement because it implements {@code doExec} and {@code validate}, but it
-   * is not actually an independent statement in the grammar.
+   * <p>This extends Statement, but it is not actually an independent statement in the grammar. We
+   * should probably eliminate it in favor of a recursive representation of if/else chains.
    */
   public static final class ConditionalStatements extends Statement {
 
@@ -37,13 +37,6 @@ public final class IfStatement extends Statement {
     public ConditionalStatements(Expression condition, List<Statement> statements) {
       this.condition = Preconditions.checkNotNull(condition);
       this.statements = ImmutableList.copyOf(statements);
-    }
-
-    @Override
-    void doExec(Environment env) throws EvalException, InterruptedException {
-      for (Statement stmt : statements) {
-        stmt.exec(env);
-      }
     }
 
     // No prettyPrint function; handled directly by IfStatement#prettyPrint.
@@ -62,18 +55,17 @@ public final class IfStatement extends Statement {
       visitor.visit(this);
     }
 
+    @Override
+    public Kind kind() {
+      return Kind.CONDITIONAL;
+    }
+
     public Expression getCondition() {
       return condition;
     }
 
     public ImmutableList<Statement> getStatements() {
       return statements;
-    }
-
-    @Override
-    void validate(ValidationEnvironment env) throws EvalException {
-      condition.validate(env);
-      validateStmts(env, statements);
     }
   }
 
@@ -123,38 +115,12 @@ public final class IfStatement extends Statement {
   }
 
   @Override
-  void doExec(Environment env) throws EvalException, InterruptedException {
-    for (ConditionalStatements stmt : thenBlocks) {
-      if (EvalUtils.toBoolean(stmt.getCondition().eval(env))) {
-        stmt.exec(env);
-        return;
-      }
-    }
-    for (Statement stmt : elseBlock) {
-      stmt.exec(env);
-    }
-  }
-
-  @Override
   public void accept(SyntaxTreeVisitor visitor) {
     visitor.visit(this);
   }
 
   @Override
-  void validate(ValidationEnvironment env) throws EvalException {
-    env.startTemporarilyDisableReadonlyCheckSession();
-    for (ConditionalStatements stmts : thenBlocks) {
-      stmts.validate(env);
-    }
-    validateStmts(env, elseBlock);
-    env.finishTemporarilyDisableReadonlyCheckSession();
-  }
-
-  private static void validateStmts(ValidationEnvironment env, List<Statement> stmts)
-      throws EvalException {
-    for (Statement stmt : stmts) {
-      stmt.validate(env);
-    }
-    env.finishTemporarilyDisableReadonlyCheckBranch();
+  public Kind kind() {
+    return Kind.IF;
   }
 }

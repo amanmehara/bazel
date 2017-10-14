@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Throwables;
 import com.google.common.cache.Cache;
 import com.google.common.collect.ImmutableCollection;
@@ -52,7 +53,7 @@ import com.google.devtools.build.lib.syntax.Environment.Extension;
 import com.google.devtools.build.lib.syntax.EvalException;
 import com.google.devtools.build.lib.syntax.ParserInputSource;
 import com.google.devtools.build.lib.syntax.SkylarkImport;
-import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
+import com.google.devtools.build.lib.syntax.SkylarkSemantics;
 import com.google.devtools.build.lib.syntax.Statement;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -132,6 +133,7 @@ public class PackageFunction implements SkyFunction {
     this.actionOnIOExceptionReadingBuildFile = actionOnIOExceptionReadingBuildFile;
   }
 
+  @VisibleForTesting
   public PackageFunction(
       PackageFactory packageFactory,
       CachingPackageLocator pkgLocator,
@@ -148,7 +150,7 @@ public class PackageFunction implements SkyFunction {
         astCache,
         numPackagesLoaded,
         skylarkImportLookupFunctionForInlining,
-        null,
+        /*packageProgress=*/ null,
         ActionOnIOExceptionReadingBuildFile.UseOriginalIOException.INSTANCE);
   }
 
@@ -171,12 +173,13 @@ public class PackageFunction implements SkyFunction {
    */
   public interface ActionOnIOExceptionReadingBuildFile {
     /**
-     * Given the {@link IOException} encountered when reading the contents of a BUILD file,
+     * Given the {@link IOException} encountered when reading the contents of the given BUILD file,
      * returns the contents that should be used, or {@code null} if the original {@link IOException}
      * should be respected (that is, we should error-out with a package loading error).
      */
     @Nullable
-    byte[] maybeGetBuildFileContentsToUse(IOException originalExn);
+    byte[] maybeGetBuildFileContentsToUse(
+        PathFragment buildFilePathFragment, IOException originalExn);
 
     /**
      * A {@link ActionOnIOExceptionReadingBuildFile} whose {@link #maybeGetBuildFileContentsToUse}
@@ -190,7 +193,8 @@ public class PackageFunction implements SkyFunction {
 
       @Override
       @Nullable
-      public byte[] maybeGetBuildFileContentsToUse(IOException originalExn) {
+      public byte[] maybeGetBuildFileContentsToUse(
+          PathFragment buildFilePathFragment, IOException originalExn) {
         return null;
       }
     }
@@ -528,7 +532,7 @@ public class PackageFunction implements SkyFunction {
       return null;
     }
 
-    SkylarkSemanticsOptions skylarkSemantics = PrecomputedValue.SKYLARK_SEMANTICS.get(env);
+    SkylarkSemantics skylarkSemantics = PrecomputedValue.SKYLARK_SEMANTICS.get(env);
     if (skylarkSemantics == null) {
       return null;
     }
@@ -1182,7 +1186,7 @@ public class PackageFunction implements SkyFunction {
       Path buildFilePath,
       @Nullable FileValue buildFileValue,
       RuleVisibility defaultVisibility,
-      SkylarkSemanticsOptions skylarkSemantics,
+      SkylarkSemantics skylarkSemantics,
       List<Statement> preludeStatements,
       Path packageRoot,
       Environment env)
@@ -1218,8 +1222,8 @@ public class PackageFunction implements SkyFunction {
                       : FileSystemUtils.readWithKnownFileSize(
                           buildFilePath, buildFileValue.getSize());
             } catch (IOException e) {
-              buildFileBytes =
-                  actionOnIOExceptionReadingBuildFile.maybeGetBuildFileContentsToUse(e);
+              buildFileBytes = actionOnIOExceptionReadingBuildFile.maybeGetBuildFileContentsToUse(
+                  buildFilePath.asFragment(), e);
               if (buildFileBytes == null) {
                 // Note that we did the work that led to this IOException, so we should
                 // conservatively report this error as transient.

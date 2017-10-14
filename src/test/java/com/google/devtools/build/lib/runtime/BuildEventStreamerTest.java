@@ -29,6 +29,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EventReportingArtifacts;
 import com.google.devtools.build.lib.actions.Root;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
+import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
@@ -108,6 +109,10 @@ public class BuildEventStreamerTest extends FoundationTestCase {
     @Override
     public ListenableFuture<Void> close() {
       return Futures.immediateFuture(null);
+    }
+
+    @Override
+    public void closeNow() {
     }
 
     List<BuildEvent> getEvents() {
@@ -609,13 +614,14 @@ public class BuildEventStreamerTest extends FoundationTestCase {
             ImmutableSet.<BuildEventId>of(ProgressEvent.INITIAL_PROGRESS_UPDATE));
     BuildConfiguration configuration =
         new BuildConfiguration(
-            new BlazeDirectories(outputBase, outputBase, rootDirectory, "productName"),
-            ImmutableMap.<Class<? extends BuildConfiguration.Fragment>,
-                          BuildConfiguration.Fragment>of(),
-            BuildOptions.of(ImmutableList.<Class<? extends FragmentOptions>>of(
-              BuildConfiguration.Options.class)),
-            "workspace",
-            null);
+            new BlazeDirectories(
+                new ServerDirectories(outputBase, outputBase), rootDirectory, "productName"),
+            ImmutableMap
+                .<Class<? extends BuildConfiguration.Fragment>, BuildConfiguration.Fragment>of(),
+            BuildOptions.of(
+                ImmutableList.<Class<? extends FragmentOptions>>of(
+                    BuildConfiguration.Options.class)),
+            "workspace");
     BuildEvent firstWithConfiguration =
         new GenericConfigurationEvent(testId("first"), configuration);
     BuildEvent secondWithConfiguration =

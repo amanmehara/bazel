@@ -39,17 +39,15 @@ import org.w3c.dom.Document;
 import org.xml.sax.InputSource;
 import org.xml.sax.SAXException;
 
-/**
- * A testing utility that allows assertions against Paths.
- */
-class PathsSubject extends Subject<PathsSubject, Path> {
+/** A testing utility that allows assertions against Paths. */
+public class PathsSubject extends Subject<PathsSubject, Path> {
 
   PathsSubject(FailureStrategy failureStrategy, @Nullable Path subject) {
     super(failureStrategy, subject);
   }
 
   void exists() {
-    if (getSubject() == null) {
+    if (actual() == null) {
       fail("should not be null.");
     }
     if (!Files.exists(getSubject())) {
@@ -58,7 +56,7 @@ class PathsSubject extends Subject<PathsSubject, Path> {
   }
 
   void xmlContentsIsEqualTo(String... contents) {
-    if (getSubject() == null) {
+    if (actual() == null) {
       fail("should not be null.");
     }
     exists();

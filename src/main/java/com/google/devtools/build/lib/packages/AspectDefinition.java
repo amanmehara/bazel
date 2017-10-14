@@ -60,7 +60,7 @@ public final class AspectDefinition {
   private final RequiredProviders requiredProviders;
   private final RequiredProviders requiredProvidersForAspects;
   private final ImmutableMap<String, Attribute> attributes;
-  private final ImmutableList<Label> requiredToolchains;
+  private final ImmutableSet<Label> requiredToolchains;
 
   /**
    * Which attributes aspect should propagate along:
@@ -83,7 +83,7 @@ public final class AspectDefinition {
       RequiredProviders requiredProviders,
       RequiredProviders requiredAspectProviders,
       ImmutableMap<String, Attribute> attributes,
-      ImmutableList<Label> requiredToolchains,
+      ImmutableSet<Label> requiredToolchains,
       @Nullable ImmutableSet<String> restrictToAttributes,
       @Nullable ConfigurationFragmentPolicy configurationFragmentPolicy,
       boolean applyToFiles) {
@@ -117,7 +117,7 @@ public final class AspectDefinition {
   }
 
   /** Returns the required toolchains declared by this aspect. */
-  public ImmutableList<Label> getRequiredToolchains() {
+  public ImmutableSet<Label> getRequiredToolchains() {
     return requiredToolchains;
   }
 
@@ -159,9 +159,10 @@ public final class AspectDefinition {
   }
 
   /**
-   * Returns whether this aspect applies to files.
+   * Returns whether this aspect applies to (output) files.
    *
-   * Currently only supported for top-level aspects and targets.
+   * Currently only supported for top-level aspects and targets, and
+   * only for output files.
    */
   public boolean applyToFiles() {
     return applyToFiles;
@@ -288,6 +289,15 @@ public final class AspectDefinition {
      */
     public Builder requireProviders(Class<?>... providers) {
       requiredProviders.addNativeSet(ImmutableSet.copyOf(providers));
+      return this;
+    }
+    
+    /**
+     * Asserts that this aspect can only be evaluated for rules that supply all of the specified
+     * Skylark providers.
+     */
+    public Builder requireSkylarkProviders(SkylarkProviderIdentifier... skylarkProviders) {
+      requiredProviders.addSkylarkSet(ImmutableSet.copyOf(skylarkProviders));
       return this;
     }
 
@@ -459,7 +469,8 @@ public final class AspectDefinition {
      * Sets whether this aspect should apply to files.
      *
      * Default is <code>false</code>.
-     * Currently only supported for top-level aspects and targets.
+     * Currently only supported for top-level aspects and targets, and only for
+     * output files.
      */
     public Builder applyToFiles(boolean propagateOverGeneratedFiles) {
       this.applyToFiles = propagateOverGeneratedFiles;
@@ -483,7 +494,7 @@ public final class AspectDefinition {
           requiredProviders.build(),
           requiredAspectProviders.build(),
           ImmutableMap.copyOf(attributes),
-          ImmutableList.copyOf(requiredToolchains),
+          ImmutableSet.copyOf(requiredToolchains),
           propagateAlongAttributes == null ? null : ImmutableSet.copyOf(propagateAlongAttributes),
           configurationFragmentPolicy.build(),
           applyToFiles);

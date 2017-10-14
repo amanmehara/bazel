@@ -1,3 +1,199 @@
+## Release 0.6.1 (2017-10-05)
+
+```
+Baseline: 87cc92e5df35d02a7c9bc50b229c513563dc1689
+
+Cherry picks:
+   + a615d288b008c36c659fdc17965207bb62d95d8d:
+     Rollback context.actions.args() functionality.
+   + 7b091c1397a82258e26ab5336df6c8dae1d97384:
+     Add a global failure when a test is interrupted/cancelled.
+   + 95b0467e3eb42a8ce8d1179c0c7e1aab040e8120:
+     Cleanups for Skylark tracebacks
+   + cc9c2f07127a832a88f27f5d72e5508000b53429:
+     Remove the status xml attribute from AntXmlResultWriter
+   + 471c0e1678d0471961f1dc467666991e4cce3846:
+     Release 0.6.0 (2017-09-28)
+   + 8bdd409f4900d4574667fed83d86b494debef467:
+     Only compute hostname once per server lifetime
+   + 0bc9b3e14f305706d72180371f73a98d6bfcdf35:
+     Fix bug in NetUtil caching.
+```
+
+Important changes:
+ - Only compute hostname once per server lifetime
+
+## Release 0.6.0 (2017-09-28)
+
+```
+Baseline: 87cc92e5df35d02a7c9bc50b229c513563dc1689
+
+Cherry picks:
+   + a615d288b008c36c659fdc17965207bb62d95d8d:
+     Rollback context.actions.args() functionality.
+   + 7b091c1397a82258e26ab5336df6c8dae1d97384:
+     Add a global failure when a test is interrupted/cancelled.
+   + 95b0467e3eb42a8ce8d1179c0c7e1aab040e8120:
+     Cleanups for Skylark tracebacks
+   + cc9c2f07127a832a88f27f5d72e5508000b53429:
+     Remove the status xml attribute from AntXmlResultWriter
+```
+
+Incompatible changes:
+
+  - Noop flag --deprecated_generate_xcode_project deleted.
+  - Objects in Skylark are converted to strings in a more descriptive
+    and less harmful way (they don't leak information that shouldn't
+    be accessed by Skylark code, e.g. nondeterministic memory addresses
+    of objects).
+  - `set` is deprecated in BUILD and .bzl files, please use `depset`
+    instead. Ordering names have also been changed, please use
+    "default", "postorder", "preorder", and "topological" instead of
+    "stable", "compile", "naive_link", and "link" correspondingly.
+  - Integer overflow (on signed 32 bit numbers) in BUILD/bzl files is
+    an error.
+  - Keyword-only syntax in a function definition is now forbidden
+      e.g. `def foo(a, *, b)` or `def foo(a, *b, c)`
+  - --incompatible_comprehension_variables_do_not_leak defaults to
+    "true."
+      Iteration variable becomes inaccessible after a list/dict
+    comprehension.
+
+New features:
+
+  - There is now a 'siblings' query function. See the query
+    documentation for more details.
+  - Added the print_action command, which outputs the
+    actions needed to build a given target in the form of an
+    ExtraActionSummary proto in text format.
+  - android_binary now supports proguard_apply_dictionary to specify
+    a custom dictionary to use for choosing names to obfuscate
+    classes and members to.
+
+Important changes:
+
+  - 'strip' action is now configured via feature configuration
+  - Flags from action_config get added first to the command line
+    first,
+    before the flags from features.
+  - `bazel info output_path` no longer relies on the root directory
+    filename being equal to the workspace name.
+  - The `print` function now prints debug messages instead of
+    warnings.
+  - speedup of incremental dexing tools
+  - --announce_rc now controls whether bazelrc startup options are
+    printed to stderr.
+  - Removing a few unused objc_provider keys.
+  - Improved logging when workers have to be restarted due to its
+    files having changed.
+  - Top-level `if` statements are now forbidden.
+  - Java protos are compiled to Java 7 bytecode.
+  - All Android builds now use the desugar tool to support some Java
+    8 features by default. To disable, use the
+    --nodesugar_for_android flag.
+  - Skylark-related options may now appear as "common" command
+    options in the .bazelrc
+  - Python is now required to build bazel.
+  - When the lvalue of an augmented assignment is a list, we now
+    throw an error
+      before evaluating the code (e.g. `a, b += 2, 3`).
+  - New --build_runfile_manifests flag controls production of
+    runfiles manifests.
+  - Enable debug info for Java builds
+  - Allow java_lite_proto_library in the deps of android rules.
+  - .so files in APKs will be memory-page aligned when
+    android_binary.nocompress_extensions contains ".so" and
+    --experimental_android_use_nocompress_extensions_on_apk is
+    specified.
+  - Skylark providers can specify allowed fields and their
+    documentation.
+  - Support ctx.actions.args() for more efficient Skylark command
+    line construction.
+  - The remote HTTP/1.1 caching client (--remote_rest_cache) now
+    distinquishes between action cache and CAS. The request URL for
+    the action cache is prefixed with 'ac' and the URL for the CAS
+    is prefixed with 'cas'.
+  - `JavaInfo` is a preferred alias to `java_common.provider`.
+  - J2ObjC version updated to 2.0.3.
+  - A new Java coverage implementation is available. Makes possible
+    coverage for Skylark JVM rules.
+  - Make proguard_apply_dictionary also apply to class and package
+    obfuscation, not just class members.
+  - When using the dictionary literal syntax, it is now an error to
+    have duplicated keys (e.g.  {'ab': 3, 'ab': 5}).
+  - android_binary.nocompress_extensions now applies to all files in
+    the APK, not just resources and assets.
+  - The apple_genrule rule that is distributed with Bazel has been
+    deleted. Users who wish to use genrules with Xcode's
+    DEVELOPER_DIR set should use the rules in
+    https://github.com/bazelbuild/rules_apple instead.
+  - The swift_library rule that is distributed with Bazel has been
+    deleted. Users who wish to compile Swift should use the rules in
+    https://github.com/bazelbuild/rules_apple instead.
+
+## Release 0.5.4 (2017-08-25)
+
+```
+Baseline: 6563b2d42d29196432d5fcafa0144b8371fbb028
+
+Cherry picks:
+   + d4fa181f8607c35230b7efa1ce94188b51508962:
+     Use getExecPathString when getting bash_main_file
+   + 837e1b3d4859140d29aaa6bbab8fbb008e6d701e:
+     Windows, sh_bin. launcher: export runfiles envvars
+   + fe9ba893c0ebec19228086356af5fa8d81f2809b:
+     grpc: Consolidate gRPC code from BES and Remote Execution. Fixes
+     #3460, #3486
+   + e8d4366cd374fba92f1425de0d475411c8defda4:
+     Automated rollback of commit
+     496d3ded0bce12b7371a93e1183ba30e6aa88032.
+   + 242a43449dd44a22857f6ce95f7cc6a7e134d298:
+     bes,remote: update default auth scope.
+   + 793b409eeae2b42be7fed58251afa87b5733ca4d:
+     Windows, sh_bin. launcher: fix manifest path
+   + 7e4fbbe4ab3915a57b2187408c3909e5cd6c6013:
+     Add --windows_exe_launcher option
+   + 91fb38e92ace6cf14ce5da6527d71320b4e3f3d2:
+     remote_worker: Serialize fork() calls. Fixes #3356
+   + b79a9fcd40f448d3aebb2b93a2ebe80d09b38408:
+     Quote python_path and launcher in
+     python_stub_template_windows.txt
+   + 4a2e17f85fc8450aa084b201c5f24b30010c5987:
+     Add build_windows_jni.sh back
+   + ce61d638197251f71ed90db74843b55d9c2e9ae5:
+     don't use methods and classes removed in upstream dx RELNOTES:
+     update dexing tools to Android SDK 26.0.1
+   + 5393a4996d701fa192964a35cbb75e558a0599c0:
+     Make Bazel enforce requirement on build-tools 26.0.1 or later.
+   + 5fac03570f80856c063c6019f5beb3bdc1672dee:
+     Fix --verbose_failures w/ sandboxing to print the full command
+     line
+   + f7bd1acf1f96bb7e3e19edb9483d9e07eb5af070:
+     Only patch in C++ compile features when they are not already
+     defined in crosstool
+   + d7f5c120417bc2d2344dfb285322355f225d9153:
+     Bump python-gflags to 3.1.0, take two
+   + 3cb136d5451e9d8af58f9a99990cad0592df101a:
+     Add python to bazel's dockerfiles
+```
+
+New features:
+
+  - Do not disable fully dynamic linking with ThinLTO when invoked
+    via LIPO options.
+
+Important changes:
+
+  - Ignore --glibc in the Android transition.
+  - Remove --experimental_android_use_singlejar_for_multidex.
+  - nocopts now also filter copts
+  - The Build Event Service (BES) client now properly supports
+    Google Applicaton Default Credentials.
+  - update dexing tools to Android SDK 26.0.1
+  - Bazel Android support now requires build-tools 26.0.1 or later.
+  - Fix a bug in the remote_worker that would at times make it crash on Linux. See #3356
+  - The java_proto_library rule now supports generated sources. See #2265
+
 ## Release 0.5.3 (2017-07-27)
 
 ```
@@ -1613,6 +1809,9 @@ Baseline: a0881e8
 ```
 
 Initial release.
+
+
+
 
 
 

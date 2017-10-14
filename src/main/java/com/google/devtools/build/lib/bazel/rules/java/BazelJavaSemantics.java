@@ -22,17 +22,20 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
+import com.google.devtools.build.lib.analysis.actions.LauncherFileWriteAction;
+import com.google.devtools.build.lib.analysis.actions.LauncherFileWriteAction.LaunchInfo;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.ComputedSubstitution;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Substitution;
 import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction.Template;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.test.TestConfiguration;
 import com.google.devtools.build.lib.bazel.rules.BazelConfiguration;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -49,6 +52,7 @@ import com.google.devtools.build.lib.rules.java.JavaCompilationArtifacts;
 import com.google.devtools.build.lib.rules.java.JavaCompilationHelper;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration;
 import com.google.devtools.build.lib.rules.java.JavaHelper;
+import com.google.devtools.build.lib.rules.java.JavaInfo;
 import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaSemantics;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
@@ -238,6 +242,15 @@ public class BazelJavaSemantics implements JavaSemantics {
     }
   }
 
+  /**
+   * In Bazel this {@code createStubAction} considers {@code javaExecutable} as a file path for the
+   * JVM binary (java).
+   */
+  @Override
+  public boolean isJavaExecutableSubstitution() {
+    return false;
+  }
+
   @Override
   public Artifact createStubAction(
       RuleContext ruleContext,
@@ -259,7 +272,10 @@ public class BazelJavaSemantics implements JavaSemantics {
     final boolean isRunfilesEnabled = ruleContext.getConfiguration().runfilesEnabled();
     arguments.add(Substitution.of("%runfiles_manifest_only%", isRunfilesEnabled ? "" : "1"));
     arguments.add(Substitution.of("%workspace_prefix%", workspacePrefix));
-    arguments.add(Substitution.of("%javabin%", javaExecutable));
+    arguments.add(
+        Substitution.of(
+            "%javabin%",
+            JavaCommon.getJavaBinSubstitutionFromJavaExecutable(ruleContext, javaExecutable)));
     arguments.add(Substitution.of("%needs_runfiles%",
         JavaCommon.getJavaExecutable(ruleContext).isAbsolute() ? "0" : "1"));
 
@@ -311,7 +327,20 @@ public class BazelJavaSemantics implements JavaSemantics {
 
     arguments.add(Substitution.of("%java_start_class%",
         ShellEscaper.escapeString(javaStartClass)));
-    arguments.add(Substitution.ofSpaceSeparatedList("%jvm_flags%", ImmutableList.copyOf(jvmFlags)));
+
+    ImmutableList<String> jvmFlagsList = ImmutableList.copyOf(jvmFlags);
+    arguments.add(Substitution.ofSpaceSeparatedList("%jvm_flags%", jvmFlagsList));
+
+    if (OS.getCurrent() == OS.WINDOWS
+        && ruleContext.getConfiguration().enableWindowsExeLauncher()) {
+      return createWindowsExeLauncher(
+          ruleContext,
+          javaExecutable,
+          classpath,
+          javaStartClass,
+          jvmFlagsList,
+          executable);
+    }
 
     ruleContext.registerAction(new TemplateExpansionAction(
         ruleContext.getActionOwner(), executable, STUB_SCRIPT, arguments, true));
@@ -342,6 +371,38 @@ public class BazelJavaSemantics implements JavaSemantics {
     } else {
       return executable;
     }
+  }
+
+  private static Artifact createWindowsExeLauncher(
+      RuleContext ruleContext,
+      String javaExecutable,
+      NestedSet<Artifact> classpath,
+      String javaStartClass,
+      ImmutableList<String> jvmFlags,
+      Artifact javaLauncher) {
+
+    LaunchInfo launchInfo =
+        LaunchInfo.builder()
+            .addKeyValuePair("binary_type", "Java")
+            .addKeyValuePair("workspace_name", ruleContext.getWorkspaceName())
+            .addKeyValuePair("java_bin_path", javaExecutable)
+            .addKeyValuePair(
+                "jar_bin_path",
+                JavaCommon.getJavaExecutable(ruleContext)
+                    .getParentDirectory()
+                    .getRelative("jar.exe")
+                    .getPathString())
+            .addKeyValuePair("java_start_class", javaStartClass)
+            .addJoinedValues(
+                "classpath",
+                ";",
+                Iterables.transform(classpath, Artifact.ROOT_RELATIVE_PATH_STRING))
+            .addJoinedValues("jvm_flags", " ", jvmFlags)
+            .build();
+
+    LauncherFileWriteAction.createAndRegister(ruleContext, javaLauncher, launchInfo);
+
+    return javaLauncher;
   }
 
   private static boolean enforceExplicitJavaTestDeps(RuleContext ruleContext) {
@@ -425,8 +486,10 @@ public class BazelJavaSemantics implements JavaSemantics {
       Runfiles.Builder runfilesBuilder) {
     TransitiveInfoCollection testSupport = getTestSupport(ruleContext);
     if (testSupport != null) {
-      // Not using addTransitiveArtifacts() due to the mismatch in NestedSet ordering.
-      runfilesBuilder.addArtifacts(getRuntimeJarsForTargets(testSupport));
+      // We assume that the runtime jars will not have conflicting artifacts
+      // with the same root relative path
+      runfilesBuilder.addTransitiveArtifactsWrappedInStableOrder(
+          getRuntimeJarsForTargets(testSupport));
     }
   }
 
@@ -594,7 +657,7 @@ public class BazelJavaSemantics implements JavaSemantics {
     // Add the coverage runner to the list of dependencies when compiling in coverage mode.
     TransitiveInfoCollection runnerTarget =
         helper.getRuleContext().getPrerequisite("$jacocorunner", Mode.TARGET);
-    if (runnerTarget.getProvider(JavaCompilationArgsProvider.class) != null) {
+    if (JavaInfo.getProvider(JavaCompilationArgsProvider.class, runnerTarget) != null) {
       helper.addLibrariesToAttributes(ImmutableList.of(runnerTarget));
     } else {
       helper
@@ -611,11 +674,17 @@ public class BazelJavaSemantics implements JavaSemantics {
   }
 
   @Override
-  public CustomCommandLine buildSingleJarCommandLine(BuildConfiguration configuration,
-      Artifact output, String mainClass, ImmutableList<String> manifestLines,
-      Iterable<Artifact> buildInfoFiles, ImmutableList<Artifact> resources,
-      Iterable<Artifact> classpath, boolean includeBuildData,
-      Compression compression, Artifact launcher) {
+  public CustomCommandLine buildSingleJarCommandLine(
+      BuildConfiguration configuration,
+      Artifact output,
+      String mainClass,
+      ImmutableList<String> manifestLines,
+      Iterable<Artifact> buildInfoFiles,
+      ImmutableList<Artifact> resources,
+      NestedSet<Artifact> classpath,
+      boolean includeBuildData,
+      Compression compression,
+      Artifact launcher) {
     return DeployArchiveBuilder.defaultSingleJarCommandLine(output, mainClass, manifestLines,
         buildInfoFiles, resources, classpath, includeBuildData, compression, launcher).build();
   }
@@ -664,7 +733,9 @@ public class BazelJavaSemantics implements JavaSemantics {
   public List<String> getExtraArguments(RuleContext ruleContext, ImmutableList<Artifact> sources) {
     if (ruleContext.getRule().getRuleClass().equals("java_test")) {
       if (useLegacyJavaTest(ruleContext)) {
-        if (ruleContext.getConfiguration().getTestArguments().isEmpty()
+        TestConfiguration testConfiguration =
+            ruleContext.getConfiguration().getFragment(TestConfiguration.class);
+        if (testConfiguration.getTestArguments().isEmpty()
             && !ruleContext.attributes().isAttributeValueExplicitlySpecified("args")) {
           ImmutableList.Builder<String> builder = ImmutableList.builder();
           for (Artifact artifact : sources) {

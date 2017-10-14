@@ -13,20 +13,19 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.python;
 
-import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
-import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.cpp.CcCommon.CcFlagsSupplier;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParams;
-import com.google.devtools.build.lib.rules.cpp.CcLinkParamsProvider;
+import com.google.devtools.build.lib.rules.cpp.CcLinkParamsInfo;
 import com.google.devtools.build.lib.rules.cpp.CcLinkParamsStore;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
@@ -57,6 +56,7 @@ public abstract class PyBinary implements RuleConfiguredTargetFactory {
 
   static RuleConfiguredTargetBuilder init(RuleContext ruleContext, PythonSemantics semantics,
       PyCommon common) throws InterruptedException {
+    ruleContext.initConfigurationMakeVariableContext(new CcFlagsSupplier(ruleContext));
     CcLinkParamsStore ccLinkParamsStore = initializeCcLinkParamStore(ruleContext);
 
     List<Artifact> srcs = common.validateSrcs();
@@ -91,22 +91,27 @@ public abstract class PyBinary implements RuleConfiguredTargetFactory {
         RunfilesSupport.withExecutable(
             ruleContext,
             defaultRunfiles,
-            common.getExecutable(),
-            ruleContext.shouldCreateRunfilesSymlinks(),
-            ImmutableList.of(new CcFlagsSupplier(ruleContext)));
+            common.getExecutable());
 
     if (ruleContext.hasErrors()) {
       return null;
     }
 
-    // Only include common runfiles and middleman. Default runfiles added by semantics are
-    // excluded. The middleman is necessary to ensure the runfiles trees are generated for all
-    // dependency binaries.
-    Runfiles dataRunfiles = new Runfiles.Builder(
-        ruleContext.getWorkspaceName(), ruleContext.getConfiguration().legacyExternalRunfiles())
-        .merge(commonRunfiles)
-        .addArtifact(runfilesSupport.getRunfilesMiddleman())
-        .build();
+    Runfiles dataRunfiles;
+    if (ruleContext.getFragment(PythonConfiguration.class).buildTransitiveRunfilesTrees()) {
+      // Only include common runfiles and middleman. Default runfiles added by semantics are
+      // excluded. The middleman is necessary to ensure the runfiles trees are generated for all
+      // dependency binaries.
+      dataRunfiles =
+          new Runfiles.Builder(
+                  ruleContext.getWorkspaceName(),
+                  ruleContext.getConfiguration().legacyExternalRunfiles())
+              .merge(commonRunfiles)
+              .addArtifact(runfilesSupport.getRunfilesMiddleman())
+              .build();
+    } else {
+      dataRunfiles = commonRunfiles;
+    }
 
     RunfilesProvider runfilesProvider = RunfilesProvider.withData(defaultRunfiles, dataRunfiles);
 
@@ -119,7 +124,7 @@ public abstract class PyBinary implements RuleConfiguredTargetFactory {
         .setFilesToBuild(common.getFilesToBuild())
         .add(RunfilesProvider.class, runfilesProvider)
         .setRunfilesSupport(runfilesSupport, realExecutable)
-        .addNativeDeclaredProvider(new CcLinkParamsProvider(ccLinkParamsStore))
+        .addNativeDeclaredProvider(new CcLinkParamsInfo(ccLinkParamsStore))
         .add(PythonImportsProvider.class, new PythonImportsProvider(imports));
   }
 
@@ -128,9 +133,6 @@ public abstract class PyBinary implements RuleConfiguredTargetFactory {
     Runfiles.Builder builder = new Runfiles.Builder(
         ruleContext.getWorkspaceName(), ruleContext.getConfiguration().legacyExternalRunfiles());
     builder.addArtifact(common.getExecutable());
-    if (common.getExecutableWrapper() != null) {
-      builder.addArtifact(common.getExecutableWrapper());
-    }
     if (common.getConvertedFiles() != null) {
       builder.addSymlinks(common.getConvertedFiles());
     } else {
@@ -150,7 +152,7 @@ public abstract class PyBinary implements RuleConfiguredTargetFactory {
                              boolean linkShared) {
         builder.addTransitiveTargets(ruleContext.getPrerequisites("deps", Mode.TARGET),
             PyCcLinkParamsProvider.TO_LINK_PARAMS,
-            CcLinkParamsProvider.TO_LINK_PARAMS);
+            CcLinkParamsInfo.TO_LINK_PARAMS);
       }
     };
   }

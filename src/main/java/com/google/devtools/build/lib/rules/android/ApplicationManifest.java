@@ -24,12 +24,13 @@ import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.FileProvider;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.FileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.rules.android.AndroidConfiguration.AndroidAaptVersion;
@@ -64,25 +65,31 @@ public final class ApplicationManifest {
     // explicitly designated as manifests on the command line
     Artifact result = AndroidBinary.getDxArtifact(
         ruleContext, "split_" + splitName + "/AndroidManifest.xml");
-    SpawnAction.Builder builder = new SpawnAction.Builder()
-        .setExecutable(ruleContext.getExecutablePrerequisite("$build_split_manifest", Mode.HOST))
-        .setProgressMessage("Creating manifest for split " + splitName)
-        .setMnemonic("AndroidBuildSplitManifest")
-        .addArgument("--main_manifest")
-        .addInputArgument(manifest)
-        .addArgument("--split_manifest")
-        .addOutputArgument(result)
-        .addArgument("--split")
-        .addArgument(splitName)
-        .addArgument(hasCode ? "--hascode" : "--nohascode");
+    SpawnAction.Builder builder =
+        new SpawnAction.Builder()
+            .setExecutable(
+                ruleContext.getExecutablePrerequisite("$build_split_manifest", Mode.HOST))
+            .setProgressMessage("Creating manifest for split %s", splitName)
+            .setMnemonic("AndroidBuildSplitManifest")
+            .addInput(manifest)
+            .addOutput(result);
+    CustomCommandLine.Builder commandLine =
+        CustomCommandLine.builder()
+            .addExecPath("--main_manifest", manifest)
+            .addExecPath("--split_manifest", result)
+            .add("--split", splitName);
+    if (hasCode) {
+      commandLine.add("--hascode");
+    } else {
+      commandLine.add("--nohascode");
+    }
 
     String overridePackage = manifestValues.get("applicationId");
     if (overridePackage != null) {
-      builder
-          .addArgument("--override_package")
-          .addArgument(overridePackage);
+      commandLine.add("--override_package", overridePackage);
     }
 
+    builder.addCommandLine(commandLine.build());
     ruleContext.registerAction(builder.build(ruleContext));
     return new ApplicationManifest(ruleContext, result, targetAaptVersion);
   }
@@ -92,26 +99,31 @@ public final class ApplicationManifest {
 
     Artifact stubManifest = ruleContext.getImplicitOutputArtifact(
             AndroidRuleClasses.MOBILE_INSTALL_STUB_APPLICATION_MANIFEST);
+    Artifact stubData =
+        ruleContext.getImplicitOutputArtifact(
+            AndroidRuleClasses.MOBILE_INSTALL_STUB_APPLICATION_DATA);
 
-    SpawnAction.Builder builder = new SpawnAction.Builder()
-        .setExecutable(ruleContext.getExecutablePrerequisite("$stubify_manifest", Mode.HOST))
-        .setProgressMessage("Injecting mobile install stub application")
-        .setMnemonic("InjectMobileInstallStubApplication")
-        .addArgument("--mode=mobile_install")
-        .addArgument("--input_manifest")
-        .addInputArgument(manifest)
-        .addArgument("--output_manifest")
-        .addOutputArgument(stubManifest)
-        .addArgument("--output_datafile")
-        .addOutputArgument(ruleContext.getImplicitOutputArtifact(
-            AndroidRuleClasses.MOBILE_INSTALL_STUB_APPLICATION_DATA));
+    SpawnAction.Builder builder =
+        new SpawnAction.Builder()
+            .setExecutable(ruleContext.getExecutablePrerequisite("$stubify_manifest", Mode.HOST))
+            .setProgressMessage("Injecting mobile install stub application")
+            .setMnemonic("InjectMobileInstallStubApplication")
+            .addInput(manifest)
+            .addOutput(stubManifest)
+            .addOutput(stubData);
+    CustomCommandLine.Builder commandLine =
+        CustomCommandLine.builder()
+            .add("--mode=mobile_install")
+            .addExecPath("--input_manifest", manifest)
+            .addExecPath("--output_manifest", stubManifest)
+            .addExecPath("--output_datafile", stubData);
 
     String overridePackage = manifestValues.get("applicationId");
     if (overridePackage != null) {
-      builder.addArgument("--override_package");
-      builder.addArgument(overridePackage);
+      commandLine.add("--override_package", overridePackage);
     }
 
+    builder.addCommandLine(commandLine.build());
     ruleContext.registerAction(builder.build(ruleContext));
 
     return new ApplicationManifest(ruleContext, stubManifest, targetAaptVersion);
@@ -123,15 +135,19 @@ public final class ApplicationManifest {
     Artifact stubManifest = ruleContext.getImplicitOutputArtifact(
         AndroidRuleClasses.INSTANT_RUN_STUB_APPLICATION_MANIFEST);
 
-    SpawnAction.Builder builder = new SpawnAction.Builder()
-        .setExecutable(ruleContext.getExecutablePrerequisite("$stubify_manifest", Mode.HOST))
-        .setProgressMessage("Injecting instant run stub application")
-        .setMnemonic("InjectInstantRunStubApplication")
-        .addArgument("--mode=instant_run")
-        .addArgument("--input_manifest")
-        .addInputArgument(manifest)
-        .addArgument("--output_manifest")
-        .addOutputArgument(stubManifest);
+    SpawnAction.Builder builder =
+        new SpawnAction.Builder()
+            .setExecutable(ruleContext.getExecutablePrerequisite("$stubify_manifest", Mode.HOST))
+            .setProgressMessage("Injecting instant run stub application")
+            .setMnemonic("InjectInstantRunStubApplication")
+            .addInput(manifest)
+            .addOutput(stubManifest)
+            .addCommandLine(
+                CustomCommandLine.builder()
+                    .add("--mode=instant_run")
+                    .addExecPath("--input_manifest", manifest)
+                    .addExecPath("--output_manifest", stubManifest)
+                    .build());
 
     ruleContext.registerAction(builder.build(ruleContext));
 
@@ -197,7 +213,7 @@ public final class ApplicationManifest {
 
     for (String variable : manifestValues.keySet()) {
       manifestValues.put(
-          variable, context.expandMakeVariables("manifest_values", manifestValues.get(variable)));
+          variable, context.getExpander().expand("manifest_values", manifestValues.get(variable)));
     }
     return ImmutableMap.copyOf(manifestValues);
   }
@@ -302,13 +318,14 @@ public final class ApplicationManifest {
     return new ApplicationManifest(ruleContext, outputManifest, targetAaptVersion);
   }
 
-  /** Packages up the manifest with assets from the rule and dependent resources. */
-  public ResourceApk packWithAssets(
-      Artifact resourceApk,
+  public ResourceApk packTestWithDataAndResources(
       RuleContext ruleContext,
+      Artifact resourceApk,
       ResourceDependencies resourceDeps,
       boolean incremental,
-      Artifact proguardCfg) throws InterruptedException, RuleErrorException {
+      Artifact proguardCfg,
+      @Nullable String packageUnderTest)
+      throws InterruptedException, RuleErrorException {
     LocalResourceContainer data = new LocalResourceContainer.Builder(ruleContext)
         .withAssets(
             AndroidCommon.getAssetDir(ruleContext),
@@ -316,7 +333,21 @@ public final class ApplicationManifest {
                 // TODO(bazel-team): Remove the ResourceType construct.
                 ResourceType.ASSETS.getAttribute(),
                 Mode.TARGET,
+                FileProvider.class))
+        .withResources(
+            ruleContext.getPrerequisites(
+                "local_resource_files",
+                Mode.TARGET,
                 FileProvider.class)).build();
+    ResourceContainer.Builder builder =
+        ResourceContainer.builderFromRule(ruleContext)
+            .setAssetsAndResourcesFrom(data)
+            .setManifest(getManifest())
+            .setApk(resourceApk);
+
+    if (ruleContext.hasErrors()) {
+      return null;
+    }
 
     return createApk(
         ruleContext,
@@ -325,15 +356,16 @@ public final class ApplicationManifest {
         ImmutableList.of(), /* uncompressedExtensions */
         true, /* crunchPng */
         incremental,
-        ResourceContainer.builderFromRule(ruleContext).setApk(resourceApk),
+        builder,
         data,
         proguardCfg,
         null, /* Artifact mainDexProguardCfg */
-        null, /* Artifact manifestOut */
+        null /* Artifact manifestOut */,
         null, /* Artifact mergedResources */
         null, /* Artifact dataBindingInfoZip */
         null, /* featureOf */
-        null /* featureAfter */);
+        null /* featureAfter */,
+        packageUnderTest);
   }
 
   /** Packages up the manifest with resource and assets from the LocalResourceContainer. */
@@ -344,8 +376,7 @@ public final class ApplicationManifest {
       Artifact rTxt,
       Artifact symbols,
       Artifact manifestOut,
-      Artifact mergedResources,
-      boolean alwaysExportManifest) throws InterruptedException, RuleErrorException {
+      Artifact mergedResources) throws InterruptedException, RuleErrorException {
     if (ruleContext.hasErrors()) {
       return null;
     }
@@ -353,16 +384,14 @@ public final class ApplicationManifest {
         ResourceContainer.builderFromRule(ruleContext)
             .setRTxt(rTxt)
             .setSymbols(symbols)
-            .setJavaPackageFrom(JavaPackageSource.MANIFEST);
-    if (alwaysExportManifest) {
-      builder.setManifestExported(true);
-    }
+            .setJavaPackageFrom(JavaPackageSource.MANIFEST)
+            .setManifestExported(true);
 
     return createApk(
         ruleContext,
         true, /* isLibrary */
         resourceDeps,
-        ImmutableList.<String>of(), /* List<String> uncompressedExtensions */
+        ImmutableList.of(), /* List<String> uncompressedExtensions */
         false, /* crunchPng */
         false, /* incremental */
         builder,
@@ -373,7 +402,8 @@ public final class ApplicationManifest {
         mergedResources,
         null, /* Artifact dataBindingInfoZip */
         null, /* Artifact featureOf */
-        null /* Artifact featureAfter */);
+        null /* Artifact featureAfter */,
+        null /* packageUnderTest */);
   }
 
   /* Creates an incremental apk from assets and data. */
@@ -414,7 +444,8 @@ public final class ApplicationManifest {
         null, /* mergedResources */
         null, /* dataBindingInfoZip */
         null, /* featureOf */
-        null /* featureAfter */);
+        null /* featureAfter */,
+        null /* packageUnderTest */);
   }
 
   /** Packages up the manifest with resource and assets from the rule and dependent resources. */
@@ -473,7 +504,8 @@ public final class ApplicationManifest {
         mergedResources,
         dataBindingInfoZip,
         featureOf,
-        featureAfter);
+        featureAfter,
+        null /* packageUnderTest */);
   }
 
   public ResourceApk packLibraryWithDataAndResources(
@@ -503,7 +535,11 @@ public final class ApplicationManifest {
             .setAssetsAndResourcesFrom(data)
             .setManifest(getManifest())
             .setSymbols(symbols)
-            .setRTxt(rTxt);
+            .setRTxt(rTxt)
+            // Request an APK so it can be inherited when a library is used in a binary's
+            // resources attr.
+            // TODO(b/30307842): Remove this once it is no longer needed for resources migration.
+            .setApk(ruleContext.getImplicitOutputArtifact(AndroidRuleClasses.ANDROID_LIBRARY_APK));
 
     if (targetAaptVersion == AndroidAaptVersion.AAPT2) {
 
@@ -535,7 +571,8 @@ public final class ApplicationManifest {
         mergedResources,
         dataBindingInfoZip,
         null /* featureOf */,
-        null /* featureAfter */);
+        null /* featureAfter */,
+        null /* packageUnderTest */);
   }
 
   private ResourceApk createApk(
@@ -553,7 +590,8 @@ public final class ApplicationManifest {
       Artifact mergedResources,
       Artifact dataBindingInfoZip,
       @Nullable Artifact featureOf,
-      @Nullable Artifact featureAfter)
+      @Nullable Artifact featureAfter,
+      @Nullable String packageUnderTest)
       throws InterruptedException, RuleErrorException {
     // Filter the resources during analysis to prevent processing of and dependencies on unwanted
     // resources during execution.
@@ -629,6 +667,7 @@ public final class ApplicationManifest {
               .withPrimary(merged)
               .setRTxtOut(merged.getRTxt())
               .setSourceJarOut(merged.getJavaSourceJar())
+              .setApkOut(resourceContainer.getApk())
               // aapt2 related artifacts. Will be generated if the targetAaptVersion is AAPT2.
               .withDependencies(resourceDeps)
               .setCompiledSymbols(merged.getCompiledSymbols())
@@ -660,7 +699,8 @@ public final class ApplicationManifest {
               .setFeatureAfter(featureAfter)
               .setThrowOnResourceConflict(
                 ruleContext.getConfiguration()
-                    .getFragment(AndroidConfiguration.class).throwOnResourceConflict());
+                    .getFragment(AndroidConfiguration.class).throwOnResourceConflict())
+              .setPackageUnderTest(packageUnderTest);
       if (!incremental) {
         builder
             .targetAaptVersion(targetAaptVersion)
@@ -764,10 +804,20 @@ public final class ApplicationManifest {
 
     ResourceFilter resourceFilter = ResourceFilter.fromRuleContext(ruleContext);
 
-    List<String> uncompressedExtensions =
-        ruleContext.getTokenizedStringListAttr("nocompress_extensions");
+    List<String> uncompressedExtensions;
+    if (ruleContext.getRule().isAttrDefined(
+        AndroidRuleClasses.NOCOMPRESS_EXTENSIONS_ATTR, Type.STRING_LIST)) {
+      uncompressedExtensions =
+          ruleContext
+              .getExpander()
+              .withDataLocations()
+              .tokenized(AndroidRuleClasses.NOCOMPRESS_EXTENSIONS_ATTR);
+    } else {
+      // This code is also used by android_test, which doesn't have this attribute.
+      uncompressedExtensions = ImmutableList.of();
+    }
 
-    ImmutableList.Builder<String> additionalAaptOpts = ImmutableList.<String>builder();
+    ImmutableList.Builder<String> additionalAaptOpts = ImmutableList.builder();
 
     for (String extension : uncompressedExtensions) {
       additionalAaptOpts.add("-0").add(extension);

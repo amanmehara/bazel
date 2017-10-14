@@ -37,12 +37,14 @@ cc_test(
     name = "option_processor_test",
     size = "small",
     srcs = ["option_processor_test.cc"],
+    tags = ["requires_internet"],
     deps = [
         "//src/main/cpp:blaze_util",
         "//src/main/cpp:option_processor",
         "//src/main/cpp:workspace_layout",
         "//src/main/cpp/util",
         "//third_party:gtest",
+        "@com_googlesource_code_re2//:re2",
     ],
 )
 
@@ -71,3 +73,21 @@ cc_test(
 )
 
 test_suite(name = "all_tests")
+
+test_suite(
+    name = "windows_tests",
+    tags = [
+        "-no_windows",
+        "-slow",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+test_suite(
+    name = "all_windows_tests",
+    tests = [
+        ":windows_tests",
+        "//src/test/cpp/util:all_windows_tests",
+    ],
+    visibility = ["//src/test:__pkg__"],
+)

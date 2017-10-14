@@ -16,9 +16,12 @@ package com.google.devtools.build.lib.rules.apple;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
-import com.google.devtools.build.lib.packages.ClassObjectConstructor;
-import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
-import com.google.devtools.build.lib.packages.SkylarkClassObject;
+import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.packages.Info;
+import com.google.devtools.build.lib.packages.NativeProvider;
+import com.google.devtools.build.lib.packages.Provider;
+import com.google.devtools.build.lib.packages.SkylarkInfo;
+import com.google.devtools.build.lib.skyframe.serialization.EnumCodec;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModuleCategory;
@@ -70,7 +73,7 @@ public enum ApplePlatform implements SkylarkValue {
   private static final ImmutableSet<String> IOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("ios_x86_64", "ios_i386");
   private static final ImmutableSet<String> IOS_DEVICE_TARGET_CPUS =
-          ImmutableSet.of("ios_armv6", "ios_arm64", "ios_armv7", "ios_armv7s");
+      ImmutableSet.of("ios_armv6", "ios_arm64", "ios_armv7", "ios_armv7s");
   private static final ImmutableSet<String> WATCHOS_SIMULATOR_TARGET_CPUS =
       ImmutableSet.of("watchos_i386");
   private static final ImmutableSet<String> WATCHOS_DEVICE_TARGET_CPUS =
@@ -81,6 +84,9 @@ public enum ApplePlatform implements SkylarkValue {
       ImmutableSet.of("tvos_arm64");
   private static final ImmutableSet<String> MACOS_TARGET_CPUS =
       ImmutableSet.of("darwin_x86_64");
+
+  private static final ImmutableSet<String> BIT_32_TARGET_CPUS =
+      ImmutableSet.of("ios_i386", "ios_armv7", "ios_armv7s", "watchos_i386", "watchos_armv7k");
 
   private final String skylarkKey;
   private final String nameInPlist;
@@ -162,11 +168,21 @@ public enum ApplePlatform implements SkylarkValue {
   }
 
   /**
+   * Returns true if the platform for the given target cpu and platform type is a known 32-bit
+   * architecture.
+   *
+   * @param platformType platform type that the given cpu value is implied for
+   * @param arch architecture representation, such as 'arm64'
+   */
+  public static boolean is32Bit(PlatformType platformType, String arch) {
+    return BIT_32_TARGET_CPUS.contains(cpuStringForTarget(platformType, arch));
+  }
+
+  /**
    * Returns the platform cpu string for the given target cpu and platform type.
    *
    * @param platformType platform type that the given cpu value is implied for
    * @param arch architecture representation, such as 'arm64'
-   * @throws IllegalArgumentException if there is no valid apple platform for the given target cpu
    */
   public static String cpuStringForTarget(PlatformType platformType, String arch) {
     switch (platformType) {
@@ -212,15 +228,13 @@ public enum ApplePlatform implements SkylarkValue {
   }
 
   /** Returns a Skylark struct that contains the instances of this enum. */
-  public static SkylarkClassObject getSkylarkStruct() {
-    ClassObjectConstructor constructor =
-        new NativeClassObjectConstructor<SkylarkClassObject>(
-            SkylarkClassObject.class, "platforms") {};
+  public static Info getSkylarkStruct() {
+    Provider constructor = new NativeProvider<Info>(Info.class, "platforms") {};
     HashMap<String, Object> fields = new HashMap<>();
     for (ApplePlatform type : values()) {
       fields.put(type.skylarkKey, type);
     }
-    return new SkylarkClassObject(constructor, fields);
+    return new SkylarkInfo(constructor, fields, Location.BUILTIN);
   }
 
   @Override
@@ -288,20 +302,20 @@ public enum ApplePlatform implements SkylarkValue {
     }
 
     /** Returns a Skylark struct that contains the instances of this enum. */
-    public static SkylarkClassObject getSkylarkStruct() {
-      ClassObjectConstructor constructor =
-          new NativeClassObjectConstructor<SkylarkClassObject>(
-              SkylarkClassObject.class, "platform_types") {};
+    public static Info getSkylarkStruct() {
+      Provider constructor = new NativeProvider<Info>(Info.class, "platform_types") {};
       HashMap<String, Object> fields = new HashMap<>();
       for (PlatformType type : values()) {
         fields.put(type.skylarkKey, type);
       }
-      return new SkylarkClassObject(constructor, fields);
+      return new SkylarkInfo(constructor, fields, Location.BUILTIN);
     }
 
     @Override
     public void repr(SkylarkPrinter printer) {
       printer.append(toString());
     }
+
+    static final EnumCodec<PlatformType> CODEC = new EnumCodec<>(PlatformType.class);
   }
 }

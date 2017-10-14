@@ -47,7 +47,7 @@ public class BazelConfiguration extends Fragment {
       documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
       effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
       help =
-          "If true, Bazel uses an environment with a static value for PATH, and LANG and does not "
+          "If true, Bazel uses an environment with a static value for PATH and does not "
               + "inherit LD_LIBRARY_PATH or TMPDIR. Use --action_env=ENV_VARIABLE if you want to "
               + "inherit specific environment variables from the client, but note that doing so "
               + "can prevent cross-user caching if a shared cache is used."
@@ -73,7 +73,7 @@ public class BazelConfiguration extends Fragment {
     public PathFragment shellExecutable;
 
     @Override
-    public Options getHost(boolean fallback) {
+    public Options getHost() {
       Options host = (Options) getDefault();
       host.useStrictActionEnv = useStrictActionEnv;
       host.shellExecutable = shellExecutable;
@@ -132,6 +132,18 @@ public class BazelConfiguration extends Fragment {
     } else {
       // TODO(ulfjack): Avoid using System.getenv; it's the wrong environment!
       builder.put("PATH", pathOrDefault(os, System.getenv("PATH"), getShellExecutable()));
+
+      // TODO(laszlocsomor): Remove setting TMP/TEMP here, and set a meaningful value just before
+      // executing the action.
+      // Setting TMP=null, TEMP=null has the effect of copying the client's TMP/TEMP to the action's
+      // environment. This is a short-term workaround to get temp-requiring actions working on
+      // Windows. Its detrimental effect is that the client's TMP/TEMP becomes part of the actions's
+      // key. Yet, we need this for now to build Android programs, because the Android BusyBox is
+      // written in Java and tries to create temp directories using
+      // java.nio.file.Files.createTempDirectory, which needs TMP or TEMP (or USERPROFILE) on
+      // Windows, otherwise they return c:\windows which is non-writable.
+      builder.put("TMP", null);
+      builder.put("TEMP", null);
 
       String ldLibraryPath = System.getenv("LD_LIBRARY_PATH");
       if (ldLibraryPath != null) {

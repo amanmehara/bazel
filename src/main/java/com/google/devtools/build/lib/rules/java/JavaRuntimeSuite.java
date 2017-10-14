@@ -16,14 +16,14 @@ package com.google.devtools.build.lib.rules.java;
 
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
+import com.google.devtools.build.lib.analysis.MakeVariableInfo;
 import com.google.devtools.build.lib.analysis.MiddlemanProvider;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
-import com.google.devtools.build.lib.rules.MakeVariableProvider;
-import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 
 /** Implementation for the {@code java_runtime_suite} rule. */
 public class JavaRuntimeSuite implements RuleConfiguredTargetFactory {
@@ -41,14 +41,14 @@ public class JavaRuntimeSuite implements RuleConfiguredTargetFactory {
           "could not resolve runtime for cpu " + ruleContext.getConfiguration().getCpu());
     }
 
-    MakeVariableProvider makeVariableProvider =
-        runtime.get(MakeVariableProvider.SKYLARK_CONSTRUCTOR);
+    MakeVariableInfo makeVariableInfo =
+        runtime.get(MakeVariableInfo.PROVIDER);
 
     return new RuleConfiguredTargetBuilder(ruleContext)
-        .addNativeDeclaredProvider(runtime.get(JavaRuntimeProvider.SKYLARK_CONSTRUCTOR))
+        .addNativeDeclaredProvider(runtime.get(JavaRuntimeInfo.PROVIDER))
         .addProvider(RunfilesProvider.class, runtime.getProvider(RunfilesProvider.class))
         .addProvider(MiddlemanProvider.class, runtime.getProvider(MiddlemanProvider.class))
-        .addNativeDeclaredProvider(makeVariableProvider)
+        .addNativeDeclaredProvider(makeVariableInfo)
         .setFilesToBuild(runtime.getProvider(FileProvider.class).getFilesToBuild())
         .build();
   }

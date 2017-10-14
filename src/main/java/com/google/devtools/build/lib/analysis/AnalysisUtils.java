@@ -17,15 +17,15 @@ package com.google.devtools.build.lib.analysis;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.BuildType;
-import com.google.devtools.build.lib.packages.NativeClassObjectConstructor;
-import com.google.devtools.build.lib.packages.SkylarkClassObject;
+import com.google.devtools.build.lib.packages.Info;
+import com.google.devtools.build.lib.packages.NativeProvider;
 import com.google.devtools.build.lib.packages.TriState;
 import com.google.devtools.build.lib.vfs.PathFragment;
 
@@ -81,9 +81,9 @@ public final class AnalysisUtils {
    * Returns the list of declared providers (native and Skylark) of the specified Skylark key from a
    * set of transitive info collections.
    */
-  public static <T extends SkylarkClassObject> Iterable<T> getProviders(
+  public static <T extends Info> Iterable<T> getProviders(
       Iterable<? extends TransitiveInfoCollection> prerequisites,
-      final NativeClassObjectConstructor<T> skylarkKey) {
+      final NativeProvider<T> skylarkKey) {
     ImmutableList.Builder<T> result = ImmutableList.builder();
     for (TransitiveInfoCollection prerequisite : prerequisites) {
       T prerequisiteProvider = prerequisite.get(skylarkKey);
@@ -102,11 +102,9 @@ public final class AnalysisUtils {
     return Iterables.filter(prerequisites, target -> target.getProvider(provider) != null);
   }
 
-  /**
-   * Returns the iterable of collections that have the specified provider.
-   */
-  public static <S extends TransitiveInfoCollection, C extends SkylarkClassObject> Iterable<S>
-  filterByProvider(Iterable<S> prerequisites, final NativeClassObjectConstructor<C> provider) {
+  /** Returns the iterable of collections that have the specified provider. */
+  public static <S extends TransitiveInfoCollection, C extends Info> Iterable<S> filterByProvider(
+      Iterable<S> prerequisites, final NativeProvider<C> provider) {
     return Iterables.filter(prerequisites, target -> target.get(provider) != null);
   }
 

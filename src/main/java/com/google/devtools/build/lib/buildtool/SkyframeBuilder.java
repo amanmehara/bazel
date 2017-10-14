@@ -31,11 +31,11 @@ import com.google.devtools.build.lib.actions.MissingInputFileException;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
+import com.google.devtools.build.lib.analysis.test.TestProvider;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionProgressReceiverAvailableEvent;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.events.Reporter;
 import com.google.devtools.build.lib.packages.BuildFileNotFoundException;
-import com.google.devtools.build.lib.rules.test.TestProvider;
 import com.google.devtools.build.lib.skyframe.ActionExecutionInactivityWatchdog;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.Builder;
@@ -107,7 +107,7 @@ public class SkyframeBuilder implements Builder {
       @Nullable Range<Long> lastExecutionTimeRange,
       TopLevelArtifactContext topLevelArtifactContext)
       throws BuildFailedException, AbruptExitException, TestExecException, InterruptedException {
-    skyframeExecutor.prepareExecution(modifiedOutputFiles, lastExecutionTimeRange);
+    skyframeExecutor.detectModifiedOutputFiles(modifiedOutputFiles, lastExecutionTimeRange);
     skyframeExecutor.configureActionExecutor(fileCache, actionInputPrefetcher);
     // Note that executionProgressReceiver accesses builtTargets concurrently (after wrapping in a
     // synchronized collection), so unsynchronized access to this variable is unsafe while it runs.
@@ -284,7 +284,7 @@ public class SkyframeBuilder implements Builder {
         // during evaluation (otherwise, it wouldn't have bothered to find a cycle). So the best
         // we can do is throw a generic build failure exception, since we've already reported the
         // cycles above.
-        throw new BuildFailedException(null, /*hasCatastrophe=*/ false);
+        throw new BuildFailedException(null, /* catastrophic= */ false);
       } else {
         rethrow(exception);
       }

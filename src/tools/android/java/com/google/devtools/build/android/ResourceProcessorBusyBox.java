@@ -26,7 +26,7 @@ import java.nio.file.FileSystems;
  * Provides an entry point for the resource processing stages.
  *
  * <p>A single entry point simplifies the build tool binary configuration and keeps the size of tool
- * jar small, as opposed to multiple tools for each prosess step. It also makes it easy to prototype
+ * jar small, as opposed to multiple tools for each process step. It also makes it easy to prototype
  * changes in the resource processing system.
  *
  * <pre>
@@ -108,6 +108,30 @@ public class ResourceProcessorBusyBox {
       void call(String[] args) throws Exception {
         ManifestMergerAction.main(args);
       }
+    },
+    COMPILE_LIBRARY_RESOURCES() {
+      @Override
+      void call(String[] args) throws Exception {
+        CompileLibraryResourcesAction.main(args);
+      }
+    },
+    LINK_STATIC_LIBRARY() {
+      @Override
+      void call(String[] args) throws Exception {
+        ValidateAndLinkResourcesAction.main(args);
+      }
+    },
+    AAPT2_PACKAGE() {
+      @Override
+      void call(String[] args) throws Exception {
+        Aapt2ResourcePackagingAction.main(args);
+      }
+    },
+    SHRINK_AAPT2() {
+      @Override
+      void call(String[] args) throws Exception {
+        Aapt2ResourceShrinkingAction.main(args);
+      }
     };
 
     abstract void call(String[] args) throws Exception;
@@ -133,7 +157,8 @@ public class ResourceProcessorBusyBox {
       help =
           "The processing tool to execute. "
               + "Valid tools: PACKAGE, VALIDATE, GENERATE_BINARY_R, GENERATE_LIBRARY_R, PARSE, "
-              + "MERGE, GENERATE_AAR, SHRINK, MERGE_MANIFEST."
+              + "MERGE, GENERATE_AAR, SHRINK, MERGE_MANIFEST, COMPILE_LIBRARY_RESOURCES, "
+              + "LINK_STATIC_LIBRARY, AAPT2_PACKAGE, SHRINK_AAPT2."
     )
     public Tool tool;
   }

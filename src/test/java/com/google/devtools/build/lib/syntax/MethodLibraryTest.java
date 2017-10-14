@@ -392,6 +392,25 @@ public class MethodLibraryTest extends EvaluationTestCase {
   }
 
   @Test
+  public void testStackTraceWithAugmentedAssignment() throws Exception {
+    new SkylarkTest()
+        .testIfErrorContains(
+            "File \"\", line 4"
+                + LINE_SEPARATOR
+                + "\t\tfoo()"
+                + LINE_SEPARATOR
+                + "\tFile \"\", line 3, in foo"
+                + LINE_SEPARATOR
+                + "\t\ts += \"2\""
+                + LINE_SEPARATOR
+                + "unsupported operand type(s) for +: 'int' and 'string'",
+            "def foo():",
+            "  s = 1",
+            "  s += '2'",
+            "foo()");
+  }
+
+  @Test
   public void testStackTraceSkipBuiltInOnly() throws Exception {
     // The error message should not include the stack trace when there is
     // only one built-in function.
@@ -1329,8 +1348,8 @@ public class MethodLibraryTest extends EvaluationTestCase {
     new SkylarkTest()
         .testEval(
             "d = {1: 'foo', 2: 'bar', 3: 'baz'}\n"
-                + "if len(d) != 3: fail('clear 1')\n"
-                + "if d.clear() != None: fail('clear 2')\n"
+                + "len(d) == 3 or fail('clear 1')\n"
+                + "d.clear() == None or fail('clear 2')\n"
                 + "d",
             "{}");
   }
@@ -1341,12 +1360,12 @@ public class MethodLibraryTest extends EvaluationTestCase {
         .testIfErrorContains(
             "KeyError: 1",
             "d = {1: 'foo', 2: 'bar', 3: 'baz'}\n"
-                + "if len(d) != 3: fail('pop 1')\n"
-                + "if d.pop(2) != 'bar': fail('pop 2')\n"
-                + "if d.pop(3, 'quux') != 'baz': fail('pop 3a')\n"
-                + "if d.pop(3, 'quux') != 'quux': fail('pop 3b')\n"
-                + "if d.pop(1) != 'foo': fail('pop 1')\n"
-                + "if d != {}: fail('pop 0')\n"
+                + "len(d) == 3 or fail('pop 1')\n"
+                + "d.pop(2) == 'bar' or fail('pop 2')\n"
+                + "d.pop(3, 'quux') == 'baz' or fail('pop 3a')\n"
+                + "d.pop(3, 'quux') == 'quux' or fail('pop 3b')\n"
+                + "d.pop(1) == 'foo' or fail('pop 1')\n"
+                + "d == {} or fail('pop 0')\n"
                 + "d.pop(1)");
   }
 
@@ -1356,11 +1375,11 @@ public class MethodLibraryTest extends EvaluationTestCase {
         .testIfErrorContains(
             "popitem(): dictionary is empty",
             "d = {2: 'bar', 3: 'baz', 1: 'foo'}\n"
-                + "if len(d) != 3: fail('popitem 0')\n"
-                + "if d.popitem() != (2, 'bar'): fail('popitem 2')\n"
-                + "if d.popitem() != (3, 'baz'): fail('popitem 3')\n"
-                + "if d.popitem() != (1, 'foo'): fail('popitem 1')\n"
-                + "if d != {}: fail('popitem 4')\n"
+                + "len(d) == 3 or fail('popitem 0')\n"
+                + "d.popitem() == (2, 'bar') or fail('popitem 2')\n"
+                + "d.popitem() == (3, 'baz') or fail('popitem 3')\n"
+                + "d.popitem() == (1, 'foo') or fail('popitem 1')\n"
+                + "d == {} or fail('popitem 4')\n"
                 + "d.popitem()");
   }
 
@@ -1379,11 +1398,11 @@ public class MethodLibraryTest extends EvaluationTestCase {
     new SkylarkTest()
         .testEval(
             "d = {2: 'bar', 1: 'foo'}\n"
-                + "if len(d) != 2: fail('setdefault 0')\n"
-                + "if d.setdefault(1, 'a') != 'foo': fail('setdefault 1')\n"
-                + "if d.setdefault(2) != 'bar': fail('setdefault 2')\n"
-                + "if d.setdefault(3) != None: fail('setdefault 3')\n"
-                + "if d.setdefault(4, 'b') != 'b': fail('setdefault 4')\n"
+                + "len(d) == 2 or fail('setdefault 0')\n"
+                + "d.setdefault(1, 'a') == 'foo' or fail('setdefault 1')\n"
+                + "d.setdefault(2) == 'bar' or fail('setdefault 2')\n"
+                + "d.setdefault(3) == None or fail('setdefault 3')\n"
+                + "d.setdefault(4, 'b') == 'b' or fail('setdefault 4')\n"
                 + "d",
             "{1: 'foo', 2: 'bar', 3: None, 4: 'b'}");
   }
@@ -1609,7 +1628,7 @@ public class MethodLibraryTest extends EvaluationTestCase {
         .testStatement("str(True)", "True")
         .testStatement("str(False)", "False")
         .testStatement("str(None)", "None")
-        .testStatement("str(str)", "<function str>");
+        .testStatement("str(str)", "<built-in function str>");
   }
 
   @Test
@@ -1633,7 +1652,9 @@ public class MethodLibraryTest extends EvaluationTestCase {
         .testStatement("int('11', 9)", 10)
         .testStatement("int('AF', 16)", 175)
         .testStatement("int('11', 36)", 37)
-        .testStatement("int('az', 36)", 395);
+        .testStatement("int('az', 36)", 395)
+        .testStatement("int('11', 10)", 11)
+        .testStatement("int('11', 0)", 11);
   }
 
   @Test
@@ -1662,7 +1683,9 @@ public class MethodLibraryTest extends EvaluationTestCase {
   public void testIntWithBase_NoString() throws Exception {
     new BothModesTest()
         .testIfExactError("int() can't convert non-string with explicit base", "int(True, 2)")
-        .testIfExactError("int() can't convert non-string with explicit base", "int(1, 2)");
+        .testIfExactError("int() can't convert non-string with explicit base", "int(1, 2)")
+        .testIfExactError("int() can't convert non-string with explicit base", "int(True, 10)")
+    ;
   }
 
   @Test

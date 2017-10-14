@@ -47,6 +47,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import javax.annotation.Nullable;
 
@@ -444,7 +445,7 @@ public class Package {
     return events;
   }
 
-  /** Returns an (immutable, unordered) view of all the targets belonging to this package. */
+  /** Returns an (immutable, ordered) view of all the targets belonging to this package. */
   public ImmutableSortedKeyMap<String, Target> getTargets() {
     return targets;
   }
@@ -457,7 +458,7 @@ public class Package {
   }
 
   /**
-   * Returns a (read-only, unordered) iterator of all the targets belonging
+   * Returns a (read-only, ordered) iterable of all the targets belonging
    * to this package which are instances of the specified class.
    */
   public <T extends Target> Iterable<T> getTargets(Class<T> targetClass) {
@@ -1167,7 +1168,7 @@ public class Package {
       }
       if (!((InputFile) cacheInstance).isVisibilitySpecified()
           || cacheInstance.getVisibility() != visibility
-          || cacheInstance.getLicense() != license) {
+          || !Objects.equals(cacheInstance.getLicense(), license)) {
         targets.put(filename, new InputFile(
             pkg, cacheInstance.getLabel(), cacheInstance.getLocation(), visibility, license));
       }
@@ -1312,12 +1313,14 @@ public class Package {
       // current instance here.
       buildFile = (InputFile) Preconditions.checkNotNull(targets.get(buildFileLabel.getName()));
 
-      List<Rule> rules = Lists.newArrayList(getTargets(Rule.class));
+      // The Iterable returned by getTargets is sorted, so when we build up the list of tests by
+      // processing it in order below, that list will be sorted too.
+      Iterable<Rule> sortedRules = Lists.newArrayList(getTargets(Rule.class));
 
       if (discoverAssumedInputFiles) {
         // All labels mentioned in a rule that refer to an unknown target in the
         // current package are assumed to be InputFiles, so let's create them:
-        for (final Rule rule : rules) {
+        for (final Rule rule : sortedRules) {
           AggregatingAttributeMapper.of(rule).visitLabels(new AcceptsLabelAttribute() {
             @Override
             public void acceptLabelAttribute(Label label, Attribute attribute) {
@@ -1332,18 +1335,17 @@ public class Package {
       // Note, we implement this here when the Package is fully constructed,
       // since clearly this information isn't available at Rule construction
       // time, as forward references are permitted.
-      List<Label> allTests = new ArrayList<>();
-      for (Rule rule : rules) {
+      List<Label> sortedTests = new ArrayList<>();
+      for (Rule rule : sortedRules) {
         if (TargetUtils.isTestRule(rule) && !TargetUtils.hasManualTag(rule)) {
-          allTests.add(rule.getLabel());
+          sortedTests.add(rule.getLabel());
         }
       }
-      Collections.sort(allTests);
-      for (Rule rule : rules) {
+      for (Rule rule : sortedRules) {
         AttributeMap attributes = NonconfigurableAttributeMapper.of(rule);
         if (rule.getRuleClass().equals("test_suite")
             && attributes.get("tests", BuildType.LABEL_LIST).isEmpty()) {
-          rule.setAttributeValueByName("$implicit_tests", allTests);
+          rule.setAttributeValueByName("$implicit_tests", sortedTests);
         }
       }
       return this;

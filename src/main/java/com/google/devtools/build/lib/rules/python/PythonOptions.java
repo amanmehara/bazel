@@ -18,6 +18,7 @@ import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
+import com.google.devtools.common.options.TriState;
 
 /**
  * Python-related command-line options.
@@ -33,6 +34,15 @@ public class PythonOptions extends FragmentOptions {
       super(PythonVersion.class, "Python version");
     }
   }
+
+  @Option(
+    name = "build_python_zip",
+    defaultValue = "auto",
+    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+    effectTags = {OptionEffectTag.UNKNOWN},
+    help = "Build python executable zip; on on Windows, off on other platforms"
+  )
+  public TriState buildPythonZip;
 
   @Option(
     name = "force_python",
@@ -63,14 +73,26 @@ public class PythonOptions extends FragmentOptions {
   }
 
   @Override
-  public FragmentOptions getHost(boolean fallback) {
+  public FragmentOptions getHost() {
     PythonOptions hostPythonOpts = (PythonOptions) getDefault();
     if (hostForcePython != null) {
       hostPythonOpts.forcePython = hostForcePython;
     } else {
       hostPythonOpts.forcePython = PythonVersion.PY2;
     }
+    hostPythonOpts.buildPythonZip = buildPythonZip;
     return hostPythonOpts;
   }
+
+  @Option(
+    name = "experimental_build_transitive_python_runfiles",
+    defaultValue = "true",
+    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+    effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS, OptionEffectTag.AFFECTS_OUTPUTS},
+    help =
+        "Build the runfiles trees of py_binary targets that appear in the transitive "
+            + "data runfiles of another binary."
+  )
+  public boolean buildTransitiveRunfilesTrees;
 }
 

@@ -28,11 +28,12 @@ import com.google.devtools.build.lib.remote.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.Digests;
 import com.google.devtools.build.lib.remote.Digests.ActionKey;
 import com.google.devtools.build.lib.remote.SimpleBlobStoreActionCache;
+import com.google.devtools.build.lib.remote.TracingMetadataUtils;
 import com.google.devtools.build.lib.shell.AbnormalTerminationException;
 import com.google.devtools.build.lib.shell.Command;
 import com.google.devtools.build.lib.shell.CommandException;
 import com.google.devtools.build.lib.shell.CommandResult;
-import com.google.devtools.build.lib.shell.TimeoutKillableObserver;
+import com.google.devtools.build.lib.shell.FutureCommandResult;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.remoteexecution.v1test.Action;
@@ -41,11 +42,12 @@ import com.google.devtools.remoteexecution.v1test.Command.EnvironmentVariable;
 import com.google.devtools.remoteexecution.v1test.ExecuteRequest;
 import com.google.devtools.remoteexecution.v1test.ExecutionGrpc.ExecutionImplBase;
 import com.google.devtools.remoteexecution.v1test.Platform;
+import com.google.devtools.remoteexecution.v1test.RequestMetadata;
 import com.google.longrunning.Operation;
-import com.google.protobuf.Duration;
 import com.google.protobuf.util.Durations;
 import com.google.rpc.Code;
 import com.google.rpc.Status;
+import io.grpc.Context;
 import io.grpc.StatusException;
 import io.grpc.protobuf.StatusProto;
 import io.grpc.stub.StreamObserver;
@@ -53,13 +55,13 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -71,14 +73,17 @@ import java.util.logging.Logger;
 final class ExecutionServer extends ExecutionImplBase {
   private static final Logger logger = Logger.getLogger(ExecutionServer.class.getName());
 
+  private final Object lock = new Object();
+
   // The name of the container image entry in the Platform proto
   // (see third_party/googleapis/devtools/remoteexecution/*/remote_execution.proto and
   // experimental_remote_platform_override in
   // src/main/java/com/google/devtools/build/lib/remote/RemoteOptions.java)
   private static final String CONTAINER_IMAGE_ENTRY_NAME = "container-image";
+  private static final String DOCKER_IMAGE_PREFIX = "docker://";
 
   // How long to wait for the uid command.
-  private static final Duration uidTimeout = Durations.fromMicros(30);
+  private static final Duration uidTimeout = Duration.ofMillis(30);
 
   private static final int LOCAL_EXEC_ERROR = -1;
 
@@ -121,12 +126,8 @@ final class ExecutionServer extends ExecutionImplBase {
   @Override
   public void execute(ExecuteRequest request, StreamObserver<Operation> responseObserver) {
     final String opName = UUID.randomUUID().toString();
-    ListenableFuture<ActionResult> future = executorService.submit(new Callable<ActionResult>() {
-      @Override
-      public ActionResult call() throws Exception {
-        return execute(request, opName);
-      }
-    });
+    ListenableFuture<ActionResult> future =
+        executorService.submit(Context.current().wrap(() -> execute(request, opName)));
     operationsCache.put(opName, future);
     responseObserver.onNext(Operation.newBuilder().setName(opName).build());
     responseObserver.onCompleted();
@@ -135,19 +136,20 @@ final class ExecutionServer extends ExecutionImplBase {
   private ActionResult execute(ExecuteRequest request, String id)
       throws IOException, InterruptedException, StatusException {
     Path tempRoot = workPath.getRelative("build-" + id);
+    String workDetails = "";
     try {
       tempRoot.createDirectory();
-      logger.log(
-          FINE,
-          "Work received has {0} input files and {1} output files.",
-          new Object[]{
-              request.getTotalInputFileCount(), request.getAction().getOutputFilesCount()
-          });
+      RequestMetadata meta = TracingMetadataUtils.fromCurrentContext();
+      workDetails =
+          String.format(
+              "build-request-id: %s command-id: %s action-id: %s",
+              meta.getCorrelatedInvocationsId(), meta.getToolInvocationId(), meta.getActionId());
+      logger.log(FINE, "Received work for: {0}", workDetails);
       ActionResult result = execute(request.getAction(), tempRoot);
-      logger.log(FINE, "Completed {0}.", id);
+      logger.log(FINE, "Completed {0}.", workDetails);
       return result;
     } catch (Exception e) {
-      logger.log(Level.SEVERE, "Work failed.", e);
+      logger.log(Level.SEVERE, "Work failed: {0} {1}.", new Object[] {workDetails, e});
       throw e;
     } finally {
       if (workerOptions.debug) {
@@ -167,8 +169,6 @@ final class ExecutionServer extends ExecutionImplBase {
 
   private ActionResult execute(Action action, Path execRoot)
       throws IOException, InterruptedException, StatusException {
-    ByteArrayOutputStream stdoutBuffer = new ByteArrayOutputStream();
-    ByteArrayOutputStream stderrBuffer = new ByteArrayOutputStream();
     com.google.devtools.remoteexecution.v1test.Command command = null;
     try {
       command =
@@ -200,41 +200,39 @@ final class ExecutionServer extends ExecutionImplBase {
             execRoot.getPathString());
     long startTime = System.currentTimeMillis();
     CommandResult cmdResult = null;
-    // Linux does not provide a safe API for a multi-threaded program to fork a subprocess. Consider
-    // the case where two threads both write an executable file and then try to execute it. It can
-    // happen that the first thread writes its executable file, with the file descriptor still
-    // being open when the second thread forks, with the fork inheriting a copy of the file
-    // descriptor. Then the first thread closes the original file descriptor, and proceeds to
-    // execute the file. At that point Linux sees an open file descriptor to the file and returns
-    // ETXTBSY (Text file busy) as an error. This race is inherent in the fork / exec duality, with
-    // fork always inheriting a copy of the file descriptor table; if there was a way to fork
-    // without copying the entire file descriptor table (e.g., only copy specific entries), we could
-    // avoid this race.
-    //
-    // I was able to reproduce this problem reliably by running significantly more threads than
-    // there are CPU cores on my workstation - the more threads the more likely it happens.
-    //
-    // As a workaround, we retry up to two times before we let the exception propagate.
-    int attempt = 0;
-    while (true) {
+
+    FutureCommandResult futureCmdResult = null;
+    synchronized (lock) {
+      // Linux does not provide a safe API for a multi-threaded program to fork a subprocess.
+      // Consider the case where two threads both write an executable file and then try to execute
+      // it. It can happen that the first thread writes its executable file, with the file
+      // descriptor still being open when the second thread forks, with the fork inheriting a copy
+      // of the file descriptor. Then the first thread closes the original file descriptor, and
+      // proceeds to execute the file. At that point Linux sees an open file descriptor to the file
+      // and returns ETXTBSY (Text file busy) as an error. This race is inherent in the fork / exec
+      // duality, with fork always inheriting a copy of the file descriptor table; if there was a
+      // way to fork without copying the entire file descriptor table (e.g., only copy specific
+      // entries), we could avoid this race.
+      //
+      // I was able to reproduce this problem reliably by running significantly more threads than
+      // there are CPU cores on my workstation - the more threads the more likely it happens.
+      //
+      // As a workaround, we put a synchronized block around the fork.
       try {
-        cmdResult =
-            cmd.execute(Command.NO_INPUT, Command.NO_OBSERVER, stdoutBuffer, stderrBuffer, true);
+        futureCmdResult = cmd.executeAsync();
+      } catch (CommandException e) {
+        Throwables.throwIfInstanceOf(e.getCause(), IOException.class);
+      }
+    }
+
+    if (futureCmdResult != null) {
+      try {
+        cmdResult = futureCmdResult.get();
       } catch (AbnormalTerminationException e) {
         cmdResult = e.getResult();
-      } catch (CommandException e) {
-        // As of this writing, the cause can only be an IOException from the underlying library.
-        IOException cause = (IOException) e.getCause();
-        if ((attempt++ < 3) && cause.getMessage().endsWith("Text file busy")) {
-          // We wait a bit to give the other forks some time to close their open file descriptors.
-          Thread.sleep(10);
-          continue;
-        } else {
-          throw cause;
-        }
       }
-      break;
     }
+
     long timeoutMillis =
         action.hasTimeout()
             ? Durations.toMillis(action.getTimeout())
@@ -262,8 +260,8 @@ final class ExecutionServer extends ExecutionImplBase {
 
     ActionResult.Builder result = ActionResult.newBuilder();
     cache.upload(result, execRoot, outputs);
-    byte[] stdout = stdoutBuffer.toByteArray();
-    byte[] stderr = stderrBuffer.toByteArray();
+    byte[] stdout = cmdResult.getStdout();
+    byte[] stderr = cmdResult.getStderr();
     cache.uploadOutErr(result, stdout, stderr);
     ActionResult finalResult = result.setExitCode(exitCode).build();
     if (exitCode == 0) {
@@ -293,15 +291,12 @@ final class ExecutionServer extends ExecutionImplBase {
   // only a small handful of cases where uid is vital (e.g., if strict permissions are set on the
   // output files), so most use cases would work without setting uid.
   private long getUid() {
-    Command cmd = new Command(new String[] {"id", "-u"});
+    Command cmd =
+        new Command(new String[] {"id", "-u"}, /*env=*/null, /*workingDir=*/null, uidTimeout);
     try {
       ByteArrayOutputStream stdout = new ByteArrayOutputStream();
       ByteArrayOutputStream stderr = new ByteArrayOutputStream();
-      cmd.execute(
-          Command.NO_INPUT,
-          new TimeoutKillableObserver(com.google.protobuf.util.Durations.toMicros(uidTimeout)),
-          stdout,
-          stderr);
+      cmd.execute(stdout, stderr);
       return Long.parseLong(stdout.toString().trim());
     } catch (CommandException | NumberFormatException e) {
       logger.log(
@@ -324,6 +319,15 @@ final class ExecutionServer extends ExecutionImplBase {
                   "Multiple entries for %s in action.Platform", CONTAINER_IMAGE_ENTRY_NAME));
         }
         result = property.getValue();
+        if (!result.startsWith(DOCKER_IMAGE_PREFIX)) {
+          throw StatusUtils.invalidArgumentError(
+              "platform", // Field name.
+              String.format(
+                  "%s: Docker images must be stored in gcr.io with an image spec in the form "
+                      + "'docker://gcr.io/{IMAGE_NAME}'",
+                  CONTAINER_IMAGE_ENTRY_NAME));
+        }
+        result = result.substring(DOCKER_IMAGE_PREFIX.length());
       }
     }
     return result;

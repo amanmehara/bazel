@@ -57,8 +57,8 @@ bool GetNullaryOption(const char *arg, const char *key);
 const char* SearchUnaryOption(const std::vector<std::string>& args,
                               const char* key);
 
-// Searches for 'key' in 'args' using GetNullaryOption. Arguments found after
-// '--' are omitted from the search.
+// Searches for 'key' in 'args' using GetNullaryOption.
+// Arguments found after '--' are omitted from the search.
 // Returns true iff key is a flag in args.
 bool SearchNullaryOption(const std::vector<std::string>& args,
                          const char* key);

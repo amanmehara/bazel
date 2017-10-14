@@ -37,9 +37,9 @@ import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
+import io.grpc.Context;
 import io.grpc.Metadata;
 import io.grpc.Status;
-import io.grpc.Status.Code;
 import io.grpc.StatusException;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -258,9 +258,11 @@ final class ByteStreamUploader {
             try {
               ListenableScheduledFuture<?> schedulingResult =
                   retryService.schedule(
-                      () ->
-                          startAsyncUploadWithRetry(
-                              chunker, backoffTimes, overallUploadResult),
+                      Context.current()
+                          .wrap(
+                              () ->
+                                  startAsyncUploadWithRetry(
+                                      chunker, backoffTimes, overallUploadResult)),
                       nextDelayMillis,
                       MILLISECONDS);
               // In case the scheduled execution errors, we need to notify the overallUploadResult.
@@ -353,7 +355,7 @@ final class ByteStreamUploader {
 
             @Override
             public void onClose(Status status, Metadata trailers) {
-              if (status.isOk() || Code.ALREADY_EXISTS.equals(status.getCode())) {
+              if (status.isOk()) {
                 listener.success();
               } else {
                 listener.failure(status);
@@ -419,7 +421,7 @@ final class ByteStreamUploader {
               return resourceName;
             }
           };
-      call.start(callListener, new Metadata());
+      call.start(callListener, TracingMetadataUtils.headersFromCurrentContext());
       call.request(1);
     }
 

@@ -19,14 +19,14 @@ import com.google.common.eventbus.Subscribe;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.test.TestProvider;
+import com.google.devtools.build.lib.analysis.test.TestResult;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadCompatible;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.packages.TestSize;
 import com.google.devtools.build.lib.packages.TestTimeout;
-import com.google.devtools.build.lib.rules.test.TestProvider;
-import com.google.devtools.build.lib.rules.test.TestResult;
 import com.google.devtools.build.lib.runtime.TerminalTestResultNotifier.TestSummaryOptions;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
@@ -112,7 +112,15 @@ public class TestResultAnalyzer {
       }
     }
 
-    Preconditions.checkState(summaries.size() == testTargets.size());
+    int summarySize = summaries.size();
+    int testTargetsSize = testTargets.size();
+    Preconditions.checkState(
+        summarySize == testTargetsSize,
+        "Unequal sizes: %s vs %s (%s and %s)",
+        summarySize,
+        testTargetsSize,
+        summaries,
+        testTargets);
 
     notifier.notify(summaries, totalRun);
     // skipped targets are not in passCount since they have NO_STATUS

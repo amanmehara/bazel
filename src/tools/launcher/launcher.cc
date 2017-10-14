@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <windows.h>
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -34,36 +35,48 @@ using std::vector;
 
 BinaryLauncherBase::BinaryLauncherBase(
     const LaunchDataParser::LaunchInfo& _launch_info, int argc, char* argv[])
-    : launch_info(_launch_info) {
-  this->workspace_name = GetLaunchInfoByKey(WORKSPACE_NAME);
+    : launch_info(_launch_info),
+      manifest_file(FindManifestFile(argv[0])),
+      workspace_name(GetLaunchInfoByKey(WORKSPACE_NAME)) {
   for (int i = 0; i < argc; i++) {
     this->commandline_arguments.push_back(argv[i]);
   }
-  ParseManifestFile(&this->manifest_file_map, FindManifestFile());
+  ParseManifestFile(&this->manifest_file_map, this->manifest_file);
 }
 
-string BinaryLauncherBase::FindManifestFile() const {
+string BinaryLauncherBase::FindManifestFile(const char* argv0) {
   // Get the name of the binary
-  string binary = GetBinaryPathWithoutExtension(this->commandline_arguments[0]);
+  string binary = GetBinaryPathWithExtension(argv0);
+
+  // The path will be set as the RUNFILES_MANIFEST_FILE envvar and used by the
+  // shell script, so let's convert backslashes to forward slashes.
+  std::replace(binary.begin(), binary.end(), '\\', '/');
 
   // Try to find <path to binary>.runfiles/MANIFEST
-  string manifest_file = binary + ".runfiles\\MANIFEST";
-  if (DoesFilePathExist(manifest_file)) {
+  string manifest_file = binary + ".runfiles/MANIFEST";
+  if (DoesFilePathExist(manifest_file.c_str())) {
     return manifest_file;
   }
 
   // Also try to check if <path to binary>.runfiles_manifest exists
   manifest_file = binary + ".runfiles_manifest";
-  if (DoesFilePathExist(manifest_file)) {
+  if (DoesFilePathExist(manifest_file.c_str())) {
     return manifest_file;
   }
 
-  die("Couldn't find MANIFEST file %s.runfiles\\", binary.c_str());
+  die("Couldn't find MANIFEST file under %s.runfiles\\", binary.c_str());
+}
+
+string BinaryLauncherBase::GetRunfilesPath() const {
+  string runfiles_path =
+      GetBinaryPathWithExtension(this->commandline_arguments[0]) + ".runfiles";
+  std::replace(runfiles_path.begin(), runfiles_path.end(), '/', '\\');
+  return runfiles_path;
 }
 
 void BinaryLauncherBase::ParseManifestFile(ManifestFileMap* manifest_file_map,
                                            const string& manifest_path) {
-  ifstream manifest_file(manifest_path.c_str());
+  ifstream manifest_file(AsAbsoluteWindowsPath(manifest_path.c_str()).c_str());
 
   if (!manifest_file) {
     die("Couldn't open MANIFEST file: %s", manifest_path.c_str());
@@ -81,11 +94,16 @@ void BinaryLauncherBase::ParseManifestFile(ManifestFileMap* manifest_file_map,
   }
 }
 
-string BinaryLauncherBase::Rlocation(const string& path) const {
-  auto entry = manifest_file_map.find(this->workspace_name + "/" + path);
+string BinaryLauncherBase::Rlocation(const string& path,
+                                     bool need_workspace_name) const {
+  string query_path = path;
+  if (need_workspace_name) {
+    query_path = this->workspace_name + "/" + path;
+  }
+  auto entry = manifest_file_map.find(query_path);
   if (entry == manifest_file_map.end()) {
     die("Rlocation failed on %s, path doesn't exist in MANIFEST file",
-        path.c_str());
+        query_path.c_str());
   }
   return entry->second;
 }
@@ -123,8 +141,28 @@ void BinaryLauncherBase::CreateCommandLine(
   result->cmdline[MAX_CMDLINE_LENGTH - 1] = 0;
 }
 
+bool BinaryLauncherBase::PrintLauncherCommandLine(
+    const string& executable, const vector<string>& arguments) const {
+  bool has_print_cmd_flag = false;
+  for (const auto& arg : arguments) {
+    has_print_cmd_flag |= (arg == "--print_launcher_command");
+  }
+  if (has_print_cmd_flag) {
+    printf("%s\n", executable.c_str());
+    for (const auto& arg : arguments) {
+      printf("%s\n", arg.c_str());
+    }
+  }
+  return has_print_cmd_flag;
+}
+
 ExitCode BinaryLauncherBase::LaunchProcess(
     const string& executable, const vector<string>& arguments) const {
+  if (PrintLauncherCommandLine(executable, arguments)) {
+    return 0;
+  }
+  SetEnv("RUNFILES_MANIFEST_ONLY", "1");
+  SetEnv("RUNFILES_MANIFEST_FILE", manifest_file);
   CmdLine cmdline;
   CreateCommandLine(&cmdline, executable, arguments);
   PROCESS_INFORMATION processInfo = {0};
@@ -142,7 +180,9 @@ ExitCode BinaryLauncherBase::LaunchProcess(
       /* lpStartupInfo */ &startupInfo,
       /* lpProcessInformation */ &processInfo);
   if (!ok) {
-    PrintError("Cannot launch process:\n%s", GetLastErrorString().c_str());
+    PrintError("Cannot launch process: %s\nReason: %s",
+               cmdline.cmdline,
+               GetLastErrorString().c_str());
     return GetLastError();
   }
   WaitForSingleObject(processInfo.hProcess, INFINITE);

@@ -13,6 +13,7 @@
 // limitations under the License.
 package com.google.devtools.build.android;
 
+import com.android.builder.core.VariantConfiguration;
 import com.android.builder.core.VariantType;
 import com.android.ide.common.internal.PngCruncher;
 import com.android.ide.common.internal.PngException;
@@ -22,7 +23,6 @@ import com.google.common.base.Stopwatch;
 import com.google.common.base.Strings;
 import com.google.common.io.Files;
 import com.google.devtools.build.android.AndroidDataMerger.MergeConflictException;
-import com.google.devtools.build.android.AndroidManifestProcessor.MergeErrorException;
 import com.google.devtools.build.android.AndroidResourceMerger.MergingException;
 import com.google.devtools.build.android.AndroidResourceProcessor.AaptConfigOptions;
 import com.google.devtools.build.android.Converters.ExistingPathConverter;
@@ -215,10 +215,15 @@ public class AndroidResourceMergingAction {
       logger.fine(String.format("Setup finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
 
       VariantType packageType = VariantType.LIBRARY;
+      String packageForR = options.packageForR;
+      if (packageForR == null) {
+        packageForR =
+            Strings.nullToEmpty(
+                VariantConfiguration.getManifestPackage(options.primaryManifest.toFile()));
+      }
       AndroidResourceClassWriter resourceClassWriter =
-          AndroidResourceClassWriter.createWith(aaptConfigOptions.androidJar,
-              generatedSources,
-              Strings.nullToEmpty(options.packageForR));
+          AndroidResourceClassWriter.createWith(
+              aaptConfigOptions.androidJar, generatedSources, packageForR);
       resourceClassWriter.setIncludeClassFile(true);
       resourceClassWriter.setIncludeJavaFile(false);
 
@@ -265,16 +270,18 @@ public class AndroidResourceMergingAction {
       if (options.resourcesOutput != null) {
         Path resourcesDir =
             AndroidResourceProcessor.processDataBindings(
+                tmp.resolve("res_no_binding"),
                 mergedData.getResourceDir(),
                 options.dataBindingInfoOut,
                 packageType,
                 options.packageForR,
-                options.primaryManifest);
+                options.primaryManifest,
+                true);
 
         // For now, try compressing the library resources that we pass to the validator. This takes
         // extra CPU resources to pack and unpack (~2x), but can reduce the zip size (~4x).
-        AndroidResourceOutputs.createResourcesZip(
-            resourcesDir, mergedData.getAssetDir(), options.resourcesOutput, true /* compress */);
+        ResourcesZip.from(resourcesDir, mergedData.getAssetDir())
+            .writeTo(options.resourcesOutput, true /* compress */);
         logger.fine(
             String.format(
                 "Create resources.zip finished at %sms", timer.elapsed(TimeUnit.MILLISECONDS)));
@@ -285,7 +292,7 @@ public class AndroidResourceMergingAction {
     } catch (MergingException e) {
       logger.log(Level.SEVERE, "Error during merging resources", e);
       throw e;
-    } catch (MergeErrorException e) {
+    } catch (AndroidManifestProcessor.ManifestProcessingException e) {
       System.exit(1);
     } catch (Exception e) {
       logger.log(Level.SEVERE, "Unexpected", e);

@@ -20,9 +20,6 @@
 namespace bazel {
 namespace launcher {
 
-static constexpr const char* BASH_BIN_PATH = "bash_bin_path";
-static constexpr const char* BASH_MAIN_FILE = "bash_main_file";
-
 class BashBinaryLauncher : public BinaryLauncherBase {
  public:
   BashBinaryLauncher(const LaunchDataParser::LaunchInfo& launch_info, int argc,

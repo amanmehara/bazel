@@ -24,15 +24,17 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.RunfilesSupport;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.test.ExecutionInfo;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform.PlatformType;
 import com.google.devtools.build.lib.rules.apple.XcodeConfig;
@@ -40,8 +42,6 @@ import com.google.devtools.build.lib.rules.objc.CompilationSupport.ExtraLinkArgs
 import com.google.devtools.build.lib.rules.objc.ObjcCommon.ResourceAttributes;
 import com.google.devtools.build.lib.rules.objc.ReleaseBundlingSupport.LinkedBinary;
 import com.google.devtools.build.lib.rules.proto.ProtoSourcesProvider;
-import com.google.devtools.build.lib.rules.test.ExecutionInfoProvider;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.syntax.Type;
 
 /** Implementation for {@code ios_test} rule in Bazel. */
@@ -78,9 +78,8 @@ public final class IosTest implements RuleConfiguredTargetFactory {
    *
    * <p>Creates a target, including registering actions, just as {@link #create(RuleContext)} does.
    * The difference between {@link #create(RuleContext)} and this method is that this method does
-   * only what is needed to support tests on the environment besides generate the Xcodeproj file and
-   * build the app and test {@code .ipa}s. The {@link #create(RuleContext)} method delegates to this
-   * method.
+   * only what is needed to support tests on the environment besides build the app and test {@code
+   * .ipa}s. The {@link #create(RuleContext)} method delegates to this method.
    */
   @Override
   public final ConfiguredTarget create(RuleContext ruleContext)
@@ -229,7 +228,7 @@ public final class IosTest implements RuleConfiguredTargetFactory {
     return new RuleConfiguredTargetBuilder(ruleContext)
         .setFilesToBuild(filesToBuildBuilder.build())
         .addProvider(RunfilesProvider.simple(runfiles))
-        .addNativeDeclaredProvider(new ExecutionInfoProvider(execInfoMapBuilder.build()))
+        .addNativeDeclaredProvider(new ExecutionInfo(execInfoMapBuilder.build()))
         .addNativeDeclaredProviders(testSupport.getExtraProviders())
         .addProvider(InstrumentedFilesProvider.class, instrumentedFilesProvider)
         .setRunfilesSupport(runfilesSupport, executable)
@@ -261,7 +260,7 @@ public final class IosTest implements RuleConfiguredTargetFactory {
                 CompilationAttributes.Builder.fromRuleContext(ruleContext).build())
             .setCompilationArtifacts(compilationArtifacts)
             .setResourceAttributes(new ResourceAttributes(ruleContext))
-            .addDefines(ruleContext.getTokenizedStringListAttr("defines"))
+            .addDefines(ruleContext.getExpander().withDataLocations().tokenized("defines"))
             .addDeps(ruleContext.getPrerequisites("deps", Mode.TARGET))
             .addRuntimeDeps(ruleContext.getPrerequisites("runtime_deps", Mode.TARGET))
             .addDeps(ruleContext.getPrerequisites("bundles", Mode.TARGET))

@@ -140,7 +140,7 @@ public class EvaluationTestCase {
   }
 
   protected BuildFileAST parseBuildFileASTWithoutValidation(String... input) {
-    return BuildFileAST.parseSkylarkString(getEventHandler(), input);
+    return BuildFileAST.parseString(getEventHandler(), input);
   }
 
   protected BuildFileAST parseBuildFileAST(String... input) {
@@ -159,30 +159,12 @@ public class EvaluationTestCase {
 
   /** Parses a statement, possibly followed by newlines. */
   protected Statement parseStatement(Parser.ParsingLevel parsingLevel, String... input) {
-    return Parser.parseStatement(
-        makeParserInputSource(input), getEventHandler(),
-        parsingLevel, Parser.Dialect.SKYLARK);
-  }
-
-  /** Parses a top-level statement, possibly followed by newlines. */
-  protected Statement parseTopLevelStatement(String... input) {
-    return Parser.parseStatement(
-        makeParserInputSource(input), getEventHandler(),
-        Parser.ParsingLevel.TOP_LEVEL, Parser.Dialect.SKYLARK);
-  }
-
-  /** Parses a local statement, possibly followed by newlines. */
-  protected Statement parseLocalLevelStatement(String... input) {
-    return Parser.parseStatement(
-        makeParserInputSource(input), getEventHandler(),
-        Parser.ParsingLevel.LOCAL_LEVEL, Parser.Dialect.SKYLARK);
+    return Parser.parseStatement(makeParserInputSource(input), getEventHandler(), parsingLevel);
   }
 
   /** Parses an expression, possibly followed by newlines. */
   protected Expression parseExpression(String... input) {
-    return Parser.parseExpression(
-        makeParserInputSource(input), getEventHandler(),
-        Parser.Dialect.SKYLARK);
+    return Parser.parseExpression(makeParserInputSource(input), getEventHandler());
   }
 
   public EvaluationTestCase update(String varname, Object value) throws Exception {
@@ -219,6 +201,14 @@ public class EvaluationTestCase {
     }
   }
 
+  public void checkEvalErrorDoesNotContain(String msg, String... input) throws Exception {
+    try {
+      eval(input);
+    } catch (EvalException | FailFastException e) {
+      assertThat(e).hasMessageThat().doesNotContain(msg);
+    }
+  }
+
   // Forward relevant methods to the EventCollectionApparatus
   public EvaluationTestCase setFailFast(boolean failFast) {
     eventCollectionApparatus.setFailFast(failFast);
@@ -240,6 +230,10 @@ public class EvaluationTestCase {
 
   public Event assertContainsWarning(String expectedMessage) {
     return eventCollectionApparatus.assertContainsWarning(expectedMessage);
+  }
+
+  public Event assertContainsDebug(String expectedMessage) {
+    return eventCollectionApparatus.assertContainsDebug(expectedMessage);
   }
 
   public EvaluationTestCase clearEvents() {
@@ -552,21 +546,25 @@ public class EvaluationTestCase {
    * A class that executes each separate test in both modes (Build and Skylark)
    */
   protected class BothModesTest extends ModalTestCase {
-    public BothModesTest() {}
+    private final String[] skylarkOptions;
+
+    public BothModesTest(String... skylarkOptions) {
+      this.skylarkOptions = skylarkOptions;
+    }
 
     /**
      * Executes the given Testable in both Build and Skylark mode
      */
     @Override
     protected void run(Testable testable) throws Exception {
-      enableSkylarkMode();
+      enableSkylarkMode(skylarkOptions);
       try {
         testable.run();
       } catch (Exception e) {
         throw new Exception("While in Skylark mode", e);
       }
 
-      enableBuildMode();
+      enableBuildMode(skylarkOptions);
       try {
         testable.run();
       } catch (Exception e) {

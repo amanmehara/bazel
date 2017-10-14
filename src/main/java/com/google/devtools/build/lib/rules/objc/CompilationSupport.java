@@ -34,7 +34,6 @@ import static java.nio.charset.StandardCharsets.ISO_8859_1;
 import static java.util.stream.Collectors.toCollection;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Joiner;
 import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
@@ -52,13 +51,18 @@ import com.google.devtools.build.lib.actions.ParameterFile;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
 import com.google.devtools.build.lib.analysis.PrerequisiteArtifacts;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorArg;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.InstrumentationSpec;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector.LocalMetadataCollector;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
@@ -79,10 +83,6 @@ import com.google.devtools.build.lib.rules.cpp.CppModuleMapAction;
 import com.google.devtools.build.lib.rules.cpp.FdoSupportProvider;
 import com.google.devtools.build.lib.rules.cpp.UmbrellaHeaderAction;
 import com.google.devtools.build.lib.rules.objc.ObjcCommandLineOptions.ObjcCrosstoolMode;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector.InstrumentationSpec;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector.LocalMetadataCollector;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
@@ -1106,12 +1106,16 @@ public abstract class CompilationSupport {
               .addExecPath("--output_archive", prunedJ2ObjcArchive)
               .addExecPath("--dummy_archive", dummyArchive)
               .addExecPath("--xcrunwrapper", xcrunwrapper(ruleContext).getExecutable())
-              .addJoinExecPaths("--dependency_mapping_files", ",", j2ObjcDependencyMappingFiles)
-              .addJoinExecPaths("--header_mapping_files", ",", j2ObjcHeaderMappingFiles)
-              .addJoinExecPaths(
-                  "--archive_source_mapping_files", ",", j2ObjcArchiveSourceMappingFiles)
+              .addExecPaths(
+                  "--dependency_mapping_files",
+                  VectorArg.join(",").each(j2ObjcDependencyMappingFiles))
+              .addExecPaths(
+                  "--header_mapping_files", VectorArg.join(",").each(j2ObjcHeaderMappingFiles))
+              .addExecPaths(
+                  "--archive_source_mapping_files",
+                  VectorArg.join(",").each(j2ObjcArchiveSourceMappingFiles))
               .add("--entry_classes")
-              .add(Joiner.on(",").join(entryClasses))
+              .addAll(VectorArg.join(",").each(entryClasses))
               .build();
 
       ruleContext.registerAction(
@@ -1134,8 +1138,8 @@ public abstract class CompilationSupport {
               .addTransitiveInputs(j2ObjcDependencyMappingFiles)
               .addTransitiveInputs(j2ObjcHeaderMappingFiles)
               .addTransitiveInputs(j2ObjcArchiveSourceMappingFiles)
-              .setCommandLine(
-                  CustomCommandLine.builder().addPaths("@%s", paramFile.getExecPath()).build())
+              .addCommandLine(
+                  CustomCommandLine.builder().addFormatted("@%s", paramFile.getExecPath()).build())
               .addOutput(prunedJ2ObjcArchive)
               .build(ruleContext));
     }
@@ -1189,10 +1193,10 @@ public abstract class CompilationSupport {
   }
 
   private static CommandLine symbolStripCommandLine(
-      Iterable<String> extraFlags, Artifact unstrippedArtifact, Artifact strippedArtifact) {
+      ImmutableList<String> extraFlags, Artifact unstrippedArtifact, Artifact strippedArtifact) {
     return CustomCommandLine.builder()
         .add(STRIP)
-        .add(extraFlags)
+        .addAll(extraFlags)
         .addExecPath("-o", strippedArtifact)
         .addPath(unstrippedArtifact.getExecPath())
         .build();
@@ -1208,7 +1212,7 @@ public abstract class CompilationSupport {
    * subject to the given {@link StrippingType}.
    */
   protected void registerBinaryStripAction(Artifact binaryToLink, StrippingType strippingType) {
-    final Iterable<String> stripArgs;
+    final ImmutableList<String> stripArgs;
     if (isTestRule) {
       // For test targets, only debug symbols are stripped off, since /usr/bin/strip is not able
       // to strip off all symbols in XCTest bundle.
@@ -1227,7 +1231,7 @@ public abstract class CompilationSupport {
                 appleConfiguration, appleConfiguration.getSingleArchPlatform())
             .setMnemonic("ObjcBinarySymbolStrip")
             .setExecutable(xcrunwrapper(ruleContext))
-            .setCommandLine(symbolStripCommandLine(stripArgs, binaryToLink, strippedBinary))
+            .addCommandLine(symbolStripCommandLine(stripArgs, binaryToLink, strippedBinary))
             .addOutput(strippedBinary)
             .addInput(binaryToLink)
             .build(ruleContext));
@@ -1284,7 +1288,7 @@ public abstract class CompilationSupport {
             ImmutableList.<PathFragment>of(),
             /*compiledModule=*/ true,
             /*moduleMapHomeIsCwd=*/ false,
-            /*generateSubModules=*/ false,
+            /* generateSubmodules= */ false,
             /*externDependencies=*/ true));
 
     return this;
@@ -1409,26 +1413,25 @@ public abstract class CompilationSupport {
                     .list());
     CustomCommandLine.Builder cmdLine =
         CustomCommandLine.builder()
-            .add("--arch")
-            .add(appleConfiguration.getSingleArchitecture().toLowerCase())
-            .add("--platform")
-            .add(appleConfiguration.getSingleArchPlatform().getLowerCaseNameInPlist())
-            .add("--sdk_version")
-            .add(XcodeConfig.getSdkVersionForPlatform(
-                ruleContext, appleConfiguration.getSingleArchPlatform())
+            .add("--arch", appleConfiguration.getSingleArchitecture().toLowerCase())
+            .add("--platform", appleConfiguration.getSingleArchPlatform().getLowerCaseNameInPlist())
+            .add(
+                "--sdk_version",
+                XcodeConfig.getSdkVersionForPlatform(
+                        ruleContext, appleConfiguration.getSingleArchPlatform())
                     .toStringWithMinimumComponents(2))
-            .add("--xcode_version")
-            .add(XcodeConfig.getXcodeVersion(ruleContext).toStringWithMinimumComponents(2))
+            .add(
+                "--xcode_version",
+                XcodeConfig.getXcodeVersion(ruleContext).toStringWithMinimumComponents(2))
             .add("--");
     for (ObjcHeaderThinningInfo info : infos) {
-      cmdLine.addJoinPaths(
-          ":",
-          Lists.newArrayList(info.sourceFile.getExecPath(), info.headersListFile.getExecPath()));
+      cmdLine.addFormatted(
+          "%s:%s", info.sourceFile.getExecPath(), info.headersListFile.getExecPath());
       builder.addInput(info.sourceFile).addOutput(info.headersListFile);
     }
     ruleContext.registerAction(
         builder
-            .setCommandLine(cmdLine.add("--").add(args).build())
+            .addCommandLine(cmdLine.add("--").addAll(args).build())
             .addInputs(compilationArtifacts.getPrivateHdrs())
             .addTransitiveInputs(attributes.hdrs())
             .addTransitiveInputs(objcProvider.get(ObjcProvider.HEADER))

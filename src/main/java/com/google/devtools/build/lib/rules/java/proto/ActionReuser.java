@@ -17,8 +17,10 @@ package com.google.devtools.build.lib.rules.java.proto;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterables.isEmpty;
-import static com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode.TARGET;
+import static com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode.TARGET;
 import static com.google.devtools.build.lib.rules.java.JavaCompilationArgs.ClasspathType.BOTH;
+import static com.google.devtools.build.lib.rules.java.proto.JplCcLinkParams.createCcLinkParamsStore;
+import static com.google.devtools.build.lib.rules.java.proto.StrictDepsUtils.createNonStrictCompilationArgsProvider;
 
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.Artifact;
@@ -36,7 +38,6 @@ import com.google.devtools.build.lib.rules.java.JavaRuleOutputJarsProvider;
 import com.google.devtools.build.lib.rules.java.JavaSkylarkApiProvider;
 import com.google.devtools.build.lib.rules.java.JavaSourceJarsProvider;
 import com.google.devtools.build.lib.rules.java.ProtoJavaApiInfoProvider;
-import com.google.devtools.build.lib.rules.proto.ProtoConfiguration;
 
 public class ActionReuser {
 
@@ -58,22 +59,11 @@ public class ActionReuser {
       return false;
     }
 
-    boolean correctRollupTransitiveProtoRuntimes =
-        ruleContext
-            .getConfiguration()
-            .getFragment(ProtoConfiguration.class)
-            .correctRollupTransitiveProtoRuntimes();
-
     JavaCompilationArgs.Builder transitiveJars =
         JavaCompilationArgs.builder()
             .addTransitiveArgs(javaApi.getTransitiveJavaCompilationArgsImmutable(), BOTH)
+            .addTransitiveArgs(javaApi.getTransitiveProtoRuntimeImmutable(), BOTH)
             .merge(directJars);
-    if (correctRollupTransitiveProtoRuntimes) {
-      transitiveJars.addTransitiveArgs(javaApi.getTransitiveProtoRuntimeImmutable(), BOTH);
-    } else {
-      transitiveJars.addTransitiveDependencies(
-          javaApi.getProtoRuntimeImmutable(), true /* recursive */);
-    }
 
     Artifact outputJar = getOnlyElement(directJars.getRuntimeJars());
     Artifact compileTimeJar = getOnlyElement(directJars.getCompileTimeJars());
@@ -85,17 +75,20 @@ public class ActionReuser {
             transitiveJars.build(),
             NestedSetBuilder.create(
                 Order.STABLE_ORDER, directJars.getCompileTimeDependencyArtifact()),
-            NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER));
+            NestedSetBuilder.emptySet(Order.STABLE_ORDER));
 
     TransitiveInfoProviderMapBuilder javaProvidersBuilder =
         new TransitiveInfoProviderMapBuilder()
             .add(createOutputJarProvider(outputJar, compileTimeJar, sourceJar))
             .add(createSrcJarProvider(sourceJar))
-            .add(compilationArgsProvider);
+            .add(compilationArgsProvider)
+            .add(createCcLinkParamsStore(ruleContext, javaApi.getProtoRuntimeImmutable()));
+
+    Iterable<JavaProtoLibraryAspectProvider> javaProtoLibraryAspectProviders =
+        ruleContext.getPrerequisites("deps", TARGET, JavaProtoLibraryAspectProvider.class);
 
     NestedSetBuilder<Artifact> transitiveOutputJars = NestedSetBuilder.stableOrder();
-    for (JavaProtoLibraryAspectProvider provider :
-        ruleContext.getPrerequisites("deps", TARGET, JavaProtoLibraryAspectProvider.class)) {
+    for (JavaProtoLibraryAspectProvider provider : javaProtoLibraryAspectProviders) {
       transitiveOutputJars.addTransitive(provider.getJars());
     }
     transitiveOutputJars.add(outputJar);
@@ -106,7 +99,13 @@ public class ActionReuser {
             JavaSkylarkApiProvider.PROTO_NAME.getLegacyId(),
             JavaSkylarkApiProvider.fromProviderMap(javaProviders))
         .addProviders(
-            new JavaProtoLibraryAspectProvider(javaProviders, transitiveOutputJars.build()));
+            new JavaProtoLibraryAspectProvider(
+                javaProviders,
+                transitiveOutputJars.build(),
+                createNonStrictCompilationArgsProvider(
+                    javaProtoLibraryAspectProviders,
+                    JavaCompilationArgs.builder().merge(directJars).build(),
+                    javaApi.getProtoRuntimeImmutable())));
     return true;
   }
 
@@ -119,7 +118,7 @@ public class ActionReuser {
 
   private static JavaSourceJarsProvider createSrcJarProvider(Artifact sourceJar) {
     return JavaSourceJarsProvider.create(
-        NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER),
+        NestedSetBuilder.emptySet(Order.STABLE_ORDER),
         NestedSetBuilder.<Artifact>stableOrder().add(sourceJar).build());
   }
 }

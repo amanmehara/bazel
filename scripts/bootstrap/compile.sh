@@ -17,8 +17,8 @@
 # Script for building bazel from scratch without bazel
 
 PROTO_FILES=$(ls src/main/protobuf/*.proto src/main/java/com/google/devtools/build/lib/buildeventstream/proto/*.proto)
-LIBRARY_JARS=$(find third_party -name '*.jar' | grep -Fv /javac-9-dev-r3297-4.jar | grep -Fv /javac-9-dev-4023-2.jar | grep -Fv /javac7.jar | grep -Fv JavaBuilder | grep -Fv third_party/guava | grep -Fv third_party/guava | grep -ve third_party/grpc/grpc.*jar | tr "\n" " ")
-GRPC_JAVA_VERSION=1.3.0
+LIBRARY_JARS=$(find third_party -name '*.jar' | grep -Fv /javac-9-dev-r3297-4.jar | grep -Fv /javac-9-dev-4023-3.jar | grep -Fv /javac7.jar | grep -Fv JavaBuilder | grep -Fv third_party/guava | grep -Fv third_party/guava | grep -ve third_party/grpc/grpc.*jar | tr "\n" " ")
+GRPC_JAVA_VERSION=1.6.1
 GRPC_LIBRARY_JARS=$(find third_party/grpc -name '*.jar' | grep -e .*${GRPC_JAVA_VERSION}.*jar | tr "\n" " ")
 # Guava jars are different for JDK 7 build and JDK 8 build, we select the good
 # one based on the name (21.0-{date} for JDK7).
@@ -50,7 +50,7 @@ if [ "$ERROR_PRONE_INDEX" -lt "$GUAVA_INDEX" ]; then
 fi
 
 DIRS=$(echo src/{java_tools/singlejar/java/com/google/devtools/build/zip,main/java,tools/xcode-common/java/com/google/devtools/build/xcode/{common,util}} third_party/java/dd_plist/java ${OUTPUT_DIR}/src)
-EXCLUDE_FILES=src/main/java/com/google/devtools/build/lib/server/GrpcServerImpl.java
+EXCLUDE_FILES="src/main/java/com/google/devtools/build/lib/server/GrpcServerImpl.java src/java_tools/buildjar/java/com/google/devtools/build/buildjar/javac/testing/*"
 
 mkdir -p "${OUTPUT_DIR}/classes"
 mkdir -p "${OUTPUT_DIR}/src"

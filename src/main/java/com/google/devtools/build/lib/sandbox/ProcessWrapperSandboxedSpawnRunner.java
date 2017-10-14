@@ -16,17 +16,16 @@ package com.google.devtools.build.lib.sandbox;
 
 import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.buildtool.BuildRequest;
-import com.google.devtools.build.lib.exec.SpawnResult;
+import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.exec.apple.XCodeLocalEnvProvider;
 import com.google.devtools.build.lib.exec.local.LocalEnvProvider;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.util.OS;
 import com.google.devtools.build.lib.vfs.Path;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /** Strategy that uses sandboxing to execute a process. */
 final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunner {
@@ -43,14 +42,10 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
 
   ProcessWrapperSandboxedSpawnRunner(
       CommandEnvironment cmdEnv,
-      BuildRequest buildRequest,
       Path sandboxBase,
       String productName,
       int timeoutGraceSeconds) {
-    super(
-        cmdEnv,
-        sandboxBase,
-        buildRequest.getOptions(SandboxOptions.class));
+    super(cmdEnv, sandboxBase);
     this.execRoot = cmdEnv.getExecRoot();
     this.productName = productName;
     this.timeoutGraceSeconds = timeoutGraceSeconds;
@@ -67,10 +62,10 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
     Path sandboxPath = getSandboxRoot();
     Path sandboxExecRoot = sandboxPath.getRelative("execroot").getRelative(execRoot.getBaseName());
 
-    int timeoutSeconds = (int) TimeUnit.MILLISECONDS.toSeconds(policy.getTimeoutMillis());
+    Duration timeout = policy.getTimeout();
     List<String> arguments =
         ProcessWrapperRunner.getCommandLine(
-            processWrapper, spawn.getArguments(), timeoutSeconds, timeoutGraceSeconds);
+            processWrapper, spawn.getArguments(), timeout, timeoutGraceSeconds);
     Map<String, String> environment =
         localEnvProvider.rewriteLocalEnv(spawn.getEnvironment(), execRoot, productName);
 
@@ -82,7 +77,7 @@ final class ProcessWrapperSandboxedSpawnRunner extends AbstractSandboxSpawnRunne
         SandboxHelpers.getInputFiles(spawn, policy, execRoot),
         SandboxHelpers.getOutputFiles(spawn),
         getWritableDirs(sandboxExecRoot, spawn.getEnvironment()));
-    return runSpawn(spawn, sandbox, policy, execRoot, timeoutSeconds);
+    return runSpawn(spawn, sandbox, policy, execRoot, timeout);
   }
 
   @Override

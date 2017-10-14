@@ -26,38 +26,44 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.LicensesProvider;
 import com.google.devtools.build.lib.analysis.LicensesProvider.TargetLicense;
+import com.google.devtools.build.lib.analysis.MakeVariableInfo;
 import com.google.devtools.build.lib.analysis.MiddlemanProvider;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.Runfiles;
 import com.google.devtools.build.lib.analysis.RunfilesProvider;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
+import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.actions.SymlinkAction;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
 import com.google.devtools.build.lib.packages.License;
-import com.google.devtools.build.lib.rules.MakeVariableProvider;
-import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.Variables;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.Variables.Builder;
+import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
 import com.google.devtools.build.lib.rules.cpp.FdoSupport.FdoException;
+import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.view.config.crosstool.CrosstoolConfig.CToolchain;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyKey;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Implementation for the cc_toolchain rule.
@@ -66,6 +72,9 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
 
   /** Default attribute name where rules store the reference to cc_toolchain */
   public static final String CC_TOOLCHAIN_DEFAULT_ATTRIBUTE_NAME = ":cc_toolchain";
+
+  /** Default attribute name for the c++ toolchain type */
+  public static final String CC_TOOLCHAIN_TYPE_ATTRIBUTE_NAME = "$cc_toolchain_type";
 
   /**
    * This file (found under the sysroot) may be unconditionally included in every C/C++ compilation.
@@ -91,7 +100,10 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
    * the indexed format (.profdata) if necessary.
    */
   private Artifact convertLLVMRawProfileToIndexed(
-      Path fdoProfile, CppConfiguration cppConfiguration, RuleContext ruleContext)
+      Path fdoProfile,
+      CppToolchainInfo toolchainInfo,
+      CppConfiguration cppConfiguration,
+      RuleContext ruleContext)
       throws InterruptedException {
 
     Artifact profileArtifact =
@@ -121,7 +133,12 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
         return null;
       }
 
+      // TODO(zhayu): find a way to avoid hard-coding cpu architecture here (b/65582760)
       String rawProfileFileName = "fdocontrolz_profile.profraw";
+      String cpu = cppConfiguration.getTargetCpu();
+      if (!"k8".equals(cpu)) {
+        rawProfileFileName = "fdocontrolz_profile-" + cpu + ".profraw";
+      }
       rawProfileArtifact =
           ruleContext.getUniqueDirectoryArtifact(
               "fdo", rawProfileFileName, ruleContext.getBinOrGenfilesDirectory());
@@ -145,12 +162,16 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
               .addOutput(rawProfileArtifact)
               .useDefaultShellEnvironment()
               .setExecutable(zipperBinaryArtifact)
-              .addArguments("xf", zipProfileArtifact.getExecPathString())
-              .addArguments(
-                  "-d", rawProfileArtifact.getExecPath().getParentDirectory().getSafePathString())
               .setProgressMessage(
-                  "LLVMUnzipProfileAction: Generating " + rawProfileArtifact.prettyPrint())
+                  "LLVMUnzipProfileAction: Generating %s", rawProfileArtifact.prettyPrint())
               .setMnemonic("LLVMUnzipProfileAction")
+              .addCommandLine(
+                  CustomCommandLine.builder()
+                      .addExecPath("xf", zipProfileArtifact)
+                      .add(
+                          "-d",
+                          rawProfileArtifact.getExecPath().getParentDirectory().getSafePathString())
+                      .build())
               .build(ruleContext));
     } else {
       rawProfileArtifact =
@@ -166,7 +187,7 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
               "Symlinking LLVM Raw Profile " + fdoProfile.getPathString()));
     }
 
-    if (cppConfiguration.getLLVMProfDataExecutable() == null) {
+    if (toolchainInfo.getToolPathFragment(Tool.LLVM_PROFDATA) == null) {
       ruleContext.ruleError(
           "llvm-profdata not available with this crosstool, needed for profile conversion");
       return null;
@@ -179,11 +200,16 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
             .addTransitiveInputs(getFiles(ruleContext, "all_files"))
             .addOutput(profileArtifact)
             .useDefaultShellEnvironment()
-            .setExecutable(cppConfiguration.getLLVMProfDataExecutable())
-            .addArguments("merge", "-o", profileArtifact.getExecPathString())
-            .addArgument(rawProfileArtifact.getExecPathString())
-            .setProgressMessage("LLVMProfDataAction: Generating " + profileArtifact.prettyPrint())
+            .setExecutable(toolchainInfo.getToolPathFragment(Tool.LLVM_PROFDATA))
+            .setProgressMessage("LLVMProfDataAction: Generating %s", profileArtifact.prettyPrint())
             .setMnemonic("LLVMProfDataAction")
+            .addCommandLine(
+                CustomCommandLine.builder()
+                    .add("merge")
+                    .add("-o")
+                    .addExecPath(profileArtifact)
+                    .addExecPath(rawProfileArtifact)
+                    .build())
             .build(ruleContext));
 
     return profileArtifact;
@@ -224,15 +250,6 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
 
     if (skyframeEnv.valuesMissing()) {
       return null;
-    }
-
-    // This tries to convert LLVM profiles to the indexed format if necessary.
-    Artifact profileArtifact = null;
-    if (cppConfiguration.isLLVMOptimizedFdo()) {
-      profileArtifact = convertLLVMRawProfileToIndexed(fdoZip, cppConfiguration, ruleContext);
-      if (ruleContext.hasErrors()) {
-        return null;
-      }
     }
 
     final Label label = ruleContext.getLabel();
@@ -329,13 +346,6 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
 
     NestedSetBuilder<Pair<String, String>> coverageEnvironment = NestedSetBuilder.compileOrder();
 
-    coverageEnvironment.add(Pair.of(
-        "COVERAGE_GCOV_PATH", cppConfiguration.getGcovExecutable().getPathString()));
-    if (cppConfiguration.getFdoInstrument() != null) {
-      coverageEnvironment.add(Pair.of(
-          "FDO_DIR", cppConfiguration.getFdoInstrument().getPathString()));
-    }
-
     NestedSet<Artifact> coverage = getOptionalFiles(ruleContext, "coverage_files");
     if (coverage.isEmpty()) {
       coverage = crosstool;
@@ -350,9 +360,54 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
       ruleContext.ruleError(e.getMessage());
     }
 
+    PlatformConfiguration platformConfig =
+        Preconditions.checkNotNull(ruleContext.getFragment(PlatformConfiguration.class));
+
+    CToolchain toolchain = null;
+    if (platformConfig
+        .getEnabledToolchainTypes()
+        .contains(CppHelper.getToolchainTypeFromRuleClass(ruleContext))) {
+      toolchain = getToolchainFromAttributes(ruleContext, cppConfiguration);
+    }
+
+    CppToolchainInfo toolchainInfo = null;
+    if (toolchain != null) {
+      try {
+        toolchainInfo =
+            new CppToolchainInfo(
+                toolchain,
+                cppConfiguration.getCrosstoolTopPathFragment(),
+                cppConfiguration.getCrosstoolTop());
+      } catch (InvalidConfigurationException e) {
+        ruleContext.throwWithRuleError(e.getMessage());
+      }
+    } else {
+      toolchainInfo = cppConfiguration.getCppToolchainInfo();
+    }
+
+    coverageEnvironment.add(
+        Pair.of(
+            "COVERAGE_GCOV_PATH", toolchainInfo.getToolPathFragment(Tool.GCOV).getPathString()));
+    if (cppConfiguration.getFdoInstrument() != null) {
+      coverageEnvironment.add(
+          Pair.of("FDO_DIR", cppConfiguration.getFdoInstrument().getPathString()));
+    }
+
+    // This tries to convert LLVM profiles to the indexed format if necessary.
+    Artifact profileArtifact = null;
+    if (cppConfiguration.isLLVMOptimizedFdo()) {
+      profileArtifact =
+          convertLLVMRawProfileToIndexed(fdoZip, toolchainInfo, cppConfiguration, ruleContext);
+      if (ruleContext.hasErrors()) {
+        return null;
+      }
+    }
+
     CcToolchainProvider ccProvider =
         new CcToolchainProvider(
             cppConfiguration,
+            toolchain,
+            toolchainInfo,
             crosstool,
             fullInputsForCrosstool(ruleContext, crosstoolMiddleman),
             compile,
@@ -377,17 +432,20 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
             cppConfiguration.supportsInterfaceSharedObjects()
                 ? ruleContext.getPrerequisiteArtifact("$link_dynamic_library_tool", Mode.HOST)
                 : null,
+            ruleContext.attributes().has("$def_parser")
+                ? ruleContext.getPrerequisiteArtifact("$def_parser", Mode.HOST)
+                : null,
             getEnvironment(ruleContext),
             builtInIncludeDirectories,
             sysroot);
 
-    MakeVariableProvider makeVariableProvider =
+    MakeVariableInfo makeVariableInfo =
         createMakeVariableProvider(cppConfiguration, sysroot);
 
     RuleConfiguredTargetBuilder builder =
         new RuleConfiguredTargetBuilder(ruleContext)
             .addNativeDeclaredProvider(ccProvider)
-            .addNativeDeclaredProvider(makeVariableProvider)
+            .addNativeDeclaredProvider(makeVariableInfo)
             .addProvider(
                 fdoSupport.getFdoSupport().createFdoSupportProvider(ruleContext, profileArtifact))
             .setFilesToBuild(new NestedSetBuilder<Artifact>(Order.STABLE_ORDER).build())
@@ -427,6 +485,37 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
     }
 
     return builder.build();
+  }
+
+  private CToolchain getToolchainFromAttributes(
+      RuleContext ruleContext, CppConfiguration cppConfiguration) throws RuleErrorException {
+    for (String requiredAttr : ImmutableList.of("cpu", "compiler", "libc")) {
+      if (ruleContext.attributes().get(requiredAttr, Type.STRING).isEmpty()) {
+        ruleContext.throwWithRuleError(
+            String.format(
+                "Using cc_toolchain target requires the attribute '%s' to be present.",
+                requiredAttr));
+      }
+    }
+
+    String cpu = ruleContext.attributes().get("cpu", Type.STRING);
+    String compiler = ruleContext.attributes().get("compiler", Type.STRING);
+    String libc = ruleContext.attributes().get("libc", Type.STRING);
+    CrosstoolConfigurationIdentifier config =
+        new CrosstoolConfigurationIdentifier(cpu, compiler, libc);
+
+    try {
+      return CrosstoolConfigurationLoader.selectToolchain(
+          cppConfiguration.getCrosstoolFile().getProto(),
+          config,
+          cppConfiguration.getLipoMode(),
+          cppConfiguration.shouldConvertLipoToThinLto(),
+          cppConfiguration.getCpuTransformer());
+    } catch (InvalidConfigurationException e) {
+      ruleContext.throwWithRuleError(
+          String.format("Error while using cc_toolchain: %s", e.getMessage()));
+      return null;
+    }
   }
 
   private ImmutableList<Artifact> getBuiltinIncludes(RuleContext ruleContext) {
@@ -505,10 +594,10 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
     TransitiveInfoCollection dep = context.getPrerequisite(attribute, Mode.HOST);
     return dep != null
         ? getFiles(context, attribute)
-        : NestedSetBuilder.<Artifact>emptySet(Order.STABLE_ORDER);
+        : NestedSetBuilder.emptySet(Order.STABLE_ORDER);
   }
 
-  private MakeVariableProvider createMakeVariableProvider(
+  private MakeVariableInfo createMakeVariableProvider(
       CppConfiguration cppConfiguration, PathFragment sysroot) {
 
     HashMap<String, String> makeVariables =
@@ -521,20 +610,38 @@ public class CcToolchain implements RuleConfiguredTargetFactory {
       ccFlags = ccFlags.isEmpty() ? sysrootFlag : ccFlags + " " + sysrootFlag;
       makeVariables.put(CppConfiguration.CC_FLAGS_MAKE_VARIABLE_NAME, ccFlags);
     }
-    return new MakeVariableProvider(ImmutableMap.copyOf(makeVariables));
+    return new MakeVariableInfo(ImmutableMap.copyOf(makeVariables));
   }
 
   /**
-   * Returns a map that should be templated into the crosstool as build variables. Is meant to
-   * be overridden by subclasses of CcToolchain.
+   * Returns {@link Variables} instance with build variables that only depend on the toolchain.
    *
    * @param ruleContext the rule context
    * @throws RuleErrorException if there are configuration errors making it impossible to resolve
    *     certain build variables of this toolchain
    */
-  protected Map<String, String> getBuildVariables(RuleContext ruleContext)
+  private final Variables getBuildVariables(RuleContext ruleContext) throws RuleErrorException {
+    Variables.Builder variables = new Variables.Builder();
+
+    PathFragment sysroot = calculateSysroot(ruleContext);
+    if (sysroot != null) {
+      variables.addStringVariable(CppModel.SYSROOT_VARIABLE_NAME, sysroot.getPathString());
+    }
+
+    addBuildVariables(ruleContext, variables);
+
+    return variables.build();
+  }
+
+  /**
+   * Add local build variables from subclasses into {@link Variables} returned from {@link
+   * #getBuildVariables(RuleContext)}.
+   *
+   * <p>This method is meant to be overridden by subclasses of CcToolchain.
+   */
+  protected void addBuildVariables(RuleContext ruleContext, Builder variables)
       throws RuleErrorException {
-    return ImmutableMap.<String, String>of();
+    // To be overridden in subclasses.
   }
 
   /**

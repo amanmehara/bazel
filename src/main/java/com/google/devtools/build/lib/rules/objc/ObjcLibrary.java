@@ -16,14 +16,14 @@ package com.google.devtools.build.lib.rules.objc;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
-import com.google.devtools.build.lib.rules.cpp.CcLinkParamsProvider;
+import com.google.devtools.build.lib.rules.cpp.CcLinkParamsInfo;
 import com.google.devtools.build.lib.rules.objc.ObjcCommon.ResourceAttributes;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.syntax.Type;
 import java.util.Map;
 import java.util.TreeMap;
@@ -41,7 +41,7 @@ public class ObjcLibrary implements RuleConfiguredTargetFactory {
         .setCompilationAttributes(
             CompilationAttributes.Builder.fromRuleContext(ruleContext).build())
         .setResourceAttributes(new ResourceAttributes(ruleContext))
-        .addDefines(ruleContext.getTokenizedStringListAttr("defines"))
+        .addDefines(ruleContext.getExpander().withDataLocations().tokenized("defines"))
         .setCompilationArtifacts(CompilationSupport.compilationArtifacts(ruleContext))
         .addDeps(ruleContext.getPrerequisites("deps", Mode.TARGET))
         .addRuntimeDeps(ruleContext.getPrerequisites("runtime_deps", Mode.TARGET))
@@ -97,7 +97,7 @@ public class ObjcLibrary implements RuleConfiguredTargetFactory {
             InstrumentedFilesProvider.class,
             compilationSupport.getInstrumentedFilesProvider(common))
         .addNativeDeclaredProvider(
-            new CcLinkParamsProvider(new ObjcLibraryCcLinkParamsStore(common)))
+            new CcLinkParamsInfo(new ObjcLibraryCcLinkParamsStore(common)))
         .addOutputGroups(outputGroupCollector)
         .build();
   }

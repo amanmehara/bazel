@@ -19,25 +19,24 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * An interface for annotating fields in classes (derived from OptionsBase)
- * that are options.
+ * An interface for annotating fields in classes (derived from OptionsBase) that are options.
+ *
+ * <p>The fields of this annotation have matching getters in {@link OptionDefinition}. Please do not
+ * access these fields directly, but instead go through that class.
+ *
+ * <p>A number of checks are run on an Option's fields' values at compile time. See
+ * {@link com.google.devtools.common.options.processor.OptionProcessor} for details.
  */
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Option {
-  /**
-   * The name of the option ("--name").
-   */
+  /** The name of the option ("--name"). */
   String name();
 
-  /**
-   * The single-character abbreviation of the option ("-abbrev").
-   */
+  /** The single-character abbreviation of the option ("-a"). */
   char abbrev() default '\0';
 
-  /**
-   * A help string for the usage information.
-   */
+  /** A help string for the usage information. */
   String help() default "";
 
   /**
@@ -89,9 +88,6 @@ public @interface Option {
    *
    * <p>For undocumented flags that aren't listed anywhere, set this to
    * OptionDocumentationCategory.UNDOCUMENTED.
-   *
-   * <p>For hidden or internal options, please set this as UNDOCUMENTED and set the specific reason
-   * for this state in the metadataTags() field.
    */
   OptionDocumentationCategory documentationCategory();
 
@@ -111,6 +107,8 @@ public @interface Option {
    *
    * <p>If one or more of the OptionMetadataTag values apply, please include, but otherwise, this
    * list can be left blank.
+   *
+   * <p>Hidden or internal options must be UNDOCUMENTED (set in {@link #documentationCategory()}).
    */
   OptionMetadataTag[] metadataTags() default {};
 
@@ -125,10 +123,10 @@ public @interface Option {
   Class<? extends Converter> converter() default Converter.class;
 
   /**
-   * A flag indicating whether the option type should be allowed to occur multiple times in a single
-   * option list.
+   * A boolean value indicating whether the option type should be allowed to occur multiple times in
+   * a single arg list.
    *
-   * <p>If the command can occur multiple times, then the attribute value <em>must</em> be a list
+   * <p>If the option can occur multiple times, then the attribute value <em>must</em> be a list
    * type {@code List<T>}, and the result type of the converter for this option must either match
    * the parameter {@code T} or {@code List<T>}. In the latter case the individual lists are
    * concatenated to form the full options value.
@@ -162,12 +160,17 @@ public @interface Option {
   Class<? extends ExpansionFunction> expansionFunction() default ExpansionFunction.class;
 
   /**
-   * If the option requires that additional options be implicitly appended, this field will contain
-   * the additional options. Implicit dependencies are parsed at the end of each {@link
-   * OptionsParser#parse} invocation, and override options specified in the same call. However, they
-   * can be overridden by options specified in a later call or by options with a higher priority.
+   * Additional options that need to be implicitly added for this option.
    *
-   * @see OptionPriority
+   * <p>Nothing guarantees that these options are not overridden by later or higher-priority values
+   * for the same options, so if this is truly a requirement, the user should check that the correct
+   * set of options is set.
+   *
+   * <p>These requirements are added for ANY mention of this option, so may not work as intended: in
+   * the case where a user is trying to explicitly turn off a flag (say, by setting a boolean flag
+   * to its default value of false), the mention will still turn on its requirements. For this
+   * reason, it is best not to use this feature, and rely on expansion flags if multi-flag groupings
+   * are needed.
    */
   String[] implicitRequirements() default {};
 
@@ -199,5 +202,6 @@ public @interface Option {
    * expansion flags to other flags, or as implicit requirements to other flags. Use the inner flags
    * instead.
    */
+  @Deprecated
   boolean wrapperOption() default false;
 }

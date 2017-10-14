@@ -28,14 +28,16 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
+import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesProvider;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
-import com.google.devtools.build.lib.rules.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.rules.apple.AppleCommandLineOptions.AppleBitcodeMode;
 import com.google.devtools.build.lib.rules.apple.AppleConfiguration;
 import com.google.devtools.build.lib.rules.apple.ApplePlatform;
@@ -44,8 +46,6 @@ import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.rules.objc.AppleDebugOutputsProvider.OutputType;
 import com.google.devtools.build.lib.rules.objc.CompilationSupport.ExtraLinkArgs;
 import com.google.devtools.build.lib.rules.objc.MultiArchBinarySupport.DependencySpecificConfiguration;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesProvider;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -164,8 +164,10 @@ public class AppleBinary implements RuleConfiguredTargetFactory {
     objcProviderBuilder.add(MULTI_ARCH_LINKED_BINARIES, outputArtifact);
 
     ObjcProvider objcProvider = objcProviderBuilder.build();
-    // TODO(cparsons): Stop propagating ObjcProvider directly from this rule.
-    targetBuilder.addNativeDeclaredProvider(objcProvider);
+
+    if (appleConfiguration.shouldLinkingRulesPropagateObjc()) {
+      targetBuilder.addNativeDeclaredProvider(objcProvider);
+    }
 
     switch (getBinaryType(ruleContext)) {
       case EXECUTABLE:

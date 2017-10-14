@@ -26,19 +26,18 @@ import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
-import com.google.devtools.build.lib.analysis.RuleConfiguredTarget.Mode;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration.StrictDepsMode;
-import com.google.devtools.build.lib.collect.ImmutableIterable;
+import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget.Mode;
+import com.google.devtools.build.lib.analysis.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.rules.java.JavaConfiguration.JavaClasspathMode;
-import com.google.devtools.build.lib.rules.test.InstrumentedFilesCollector;
 import com.google.devtools.build.lib.syntax.Type;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.Preconditions;
@@ -46,10 +45,8 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Map;
 import javax.annotation.Nullable;
 
 /**
@@ -225,7 +222,6 @@ public final class JavaCompilationHelper {
     builder.setClassDirectory(classDir(classJar));
     builder.setProcessorPaths(attributes.getProcessorPath());
     builder.addProcessorNames(attributes.getProcessorNames());
-    builder.addProcessorFlags(attributes.getProcessorFlags());
     builder.setStrictJavaDeps(attributes.getStrictJavaDeps());
     builder.setDirectJars(attributes.getDirectJars());
     builder.setCompileTimeDependencyArtifacts(attributes.getCompileTimeDependencyArtifacts());
@@ -373,12 +369,11 @@ public final class JavaCompilationHelper {
     builder.addSourceJars(attributes.getSourceJars());
     builder.setClasspathEntries(attributes.getCompileTimeClassPath());
     builder.setBootclasspathEntries(
-        ImmutableIterable.from(Iterables.concat(getBootclasspathOrDefault(), getExtdirInputs())));
+        ImmutableList.copyOf(Iterables.concat(getBootclasspathOrDefault(), getExtdirInputs())));
 
     // only run API-generating annotation processors during header compilation
     builder.setProcessorPaths(attributes.getApiGeneratingProcessorPath());
     builder.addProcessorNames(attributes.getApiGeneratingProcessorNames());
-    builder.addProcessorFlags(attributes.getProcessorFlags());
     builder.setJavacOpts(getJavacOpts());
     builder.setTempDirectory(tempDir(headerJar));
     builder.setOutputJar(headerJar);
@@ -462,7 +457,7 @@ public final class JavaCompilationHelper {
                     JavaCommon.getHostJavaExecutable(ruleContext),
                     getGenClassJar(ruleContext),
                     javaToolchain.getJvmOptions())
-                .setCommandLine(
+                .addCommandLine(
                     CustomCommandLine.builder()
                         .addExecPath("--manifest_proto", manifestProto)
                         .addExecPath("--class_jar", classJar)
@@ -470,7 +465,7 @@ public final class JavaCompilationHelper {
                         .add("--temp_dir")
                         .addPath(tempDir(genClassJar))
                         .build())
-                .setProgressMessage("Building genclass jar " + genClassJar.prettyPrint())
+                .setProgressMessage("Building genclass jar %s", genClassJar.prettyPrint())
                 .setMnemonic("JavaSourceJar")
                 .build(getRuleContext()));
   }
@@ -591,15 +586,13 @@ public final class JavaCompilationHelper {
    */
   public void createSourceJarAction(Artifact outputJar, @Nullable Artifact gensrcJar) {
     JavaTargetAttributes attributes = getAttributes();
-    Collection<Artifact> resourceJars = new ArrayList<>(attributes.getSourceJars());
+    NestedSetBuilder<Artifact> resourceJars = NestedSetBuilder.stableOrder();
+    resourceJars.addAll(attributes.getSourceJars());
     if (gensrcJar != null) {
       resourceJars.add(gensrcJar);
     }
-    Map<PathFragment, Artifact> resources = new LinkedHashMap<>();
-    for (Artifact sourceFile : attributes.getSourceFiles()) {
-      resources.put(semantics.getDefaultJavaResourcePath(sourceFile.getRootRelativePath()), sourceFile);
-    }
-    SingleJarActionBuilder.createSourceJarAction(ruleContext, resources, resourceJars, outputJar);
+    SingleJarActionBuilder.createSourceJarAction(
+        ruleContext, semantics, attributes.getSourceFiles(), resourceJars.build(), outputJar);
   }
 
   /**
@@ -611,14 +604,20 @@ public final class JavaCompilationHelper {
   public Artifact createCompileTimeJarAction(
       Artifact runtimeJar, JavaCompilationArtifacts.Builder builder) {
     Artifact jar;
+    boolean isFullJar = false;
     if (shouldUseHeaderCompilation()) {
       jar = createHeaderCompilationAction(runtimeJar, builder);
     } else if (getJavaConfiguration().getUseIjars()) {
       jar = createIjarAction(ruleContext, javaToolchain, runtimeJar, false);
     } else {
       jar = runtimeJar;
+      isFullJar = true;
     }
-    builder.addCompileTimeJar(jar);
+    if (isFullJar) {
+      builder.addCompileTimeJarAsFullJar(jar);
+    } else {
+      builder.addInterfaceJarWithFullJar(jar, runtimeJar);
+    }
     return jar;
   }
 
@@ -682,7 +681,7 @@ public final class JavaCompilationHelper {
       List<JavaCompilationArgsProvider> compilationArgsProviders = new LinkedList<>();
       for (TransitiveInfoCollection dep : deps) {
         JavaCompilationArgsProvider provider =
-            JavaProvider.getProvider(JavaCompilationArgsProvider.class, dep);
+            JavaInfo.getProvider(JavaCompilationArgsProvider.class, dep);
         if (provider != null) {
           compilationArgsProviders.add(provider);
         }
@@ -722,7 +721,7 @@ public final class JavaCompilationHelper {
     return ImmutableList.copyOf(
         Iterables.concat(
             JavaToolchainProvider.fromRuleContext(ruleContext).getJavacOptions(),
-            ruleContext.getTokenizedStringListAttr("javacopts")));
+            ruleContext.getExpander().withDataLocations().tokenized("javacopts")));
   }
 
   public void setTranslations(Collection<Artifact> translations) {
@@ -797,19 +796,23 @@ public final class JavaCompilationHelper {
     Artifact interfaceJar = getIjarArtifact(ruleContext, inputJar, addPrefix);
     FilesToRunProvider ijarTarget = javaToolchain.getIjar();
     if (!ruleContext.hasErrors()) {
-      ruleContext.registerAction(new SpawnAction.Builder()
-          .addInput(inputJar)
-          .addOutput(interfaceJar)
-          .setExecutable(ijarTarget)
-          // On Windows, ijar.exe needs msys-2.0.dll and zlib1.dll in PATH.
-          // Use default shell environment so that those can be found.
-          // TODO(dslomov): revisit this. If ijar is not msys-dependent, this is not needed.
-          .useDefaultShellEnvironment()
-          .addArgument(inputJar.getExecPathString())
-          .addArgument(interfaceJar.getExecPathString())
-          .setProgressMessage("Extracting interface " + ruleContext.getLabel())
-          .setMnemonic("JavaIjar")
-          .build(ruleContext));
+      ruleContext.registerAction(
+          new SpawnAction.Builder()
+              .addInput(inputJar)
+              .addOutput(interfaceJar)
+              .setExecutable(ijarTarget)
+              // On Windows, ijar.exe needs msys-2.0.dll and zlib1.dll in PATH.
+              // Use default shell environment so that those can be found.
+              // TODO(dslomov): revisit this. If ijar is not msys-dependent, this is not needed.
+              .useDefaultShellEnvironment()
+              .setProgressMessage("Extracting interface %s", ruleContext.getLabel())
+              .setMnemonic("JavaIjar")
+              .addCommandLine(
+                  CustomCommandLine.builder()
+                      .addExecPath(inputJar)
+                      .addExecPath(interfaceJar)
+                      .build())
+              .build(ruleContext));
     }
     return interfaceJar;
   }

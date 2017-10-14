@@ -40,14 +40,14 @@ EOF
 exit 1
 EOF
   chmod 755 pkg/false.sh
-  cat > pkg/slowtest.sh <<EOF
+  cat > pkg/slowtest.sh <<'EOF'
 #!/bin/sh
 sleep 1
 exit 0
 EOF
   chmod 755 pkg/slowtest.sh
   touch pkg/sourcefileA pkg/sourcefileB pkg/sourcefileC
-  cat > pkg/BUILD <<EOF
+  cat > pkg/BUILD <<'EOF'
 exports_files(["somesourcefile"])
 sh_test(
   name = "true",
@@ -71,11 +71,16 @@ genrule(
   name = "fails_to_build",
   outs = ["fails_to_build.txt"],
   cmd = "false",
+  executable = 1,
+)
+sh_test(
+  name = "test_that_fails_to_build",
+  srcs = [":fails_to_build"],
 )
 genrule(
   name = "output_files_and_tags",
   outs = ["out1.txt"],
-  cmd = "echo foo > \\"\$@\\"",
+  cmd = "echo foo > \"$@\"",
   tags = ["tag1", "tag2"]
 )
 action_listener(
@@ -96,8 +101,13 @@ filegroup(
   name = "outergroup",
   srcs = ["sourcefileC", ":innergroup"],
 )
+genrule(
+  name = "not_a_test",
+  outs = ["not_a_test.txt"],
+  cmd = "touch $@",
+)
 EOF
-cat > simpleaspect.bzl <<EOF
+cat > simpleaspect.bzl <<'EOF'
 def _simple_aspect_impl(target, ctx):
     for orig_out in ctx.rule.attr.outs:
         aspect_out = ctx.actions.declare_file(orig_out.name + ".aspect")
@@ -105,11 +115,11 @@ def _simple_aspect_impl(target, ctx):
             output=aspect_out,
             content = "Hello from aspect")
     return struct(output_groups={
-        "aspect-out" : set([aspect_out]) })
+        "aspect-out" : depset([aspect_out]) })
 
 simple_aspect = aspect(implementation=_simple_aspect_impl)
 EOF
-cat > failingaspect.bzl <<EOF
+cat > failingaspect.bzl <<'EOF'
 def _failing_aspect_impl(target, ctx):
     for orig_out in ctx.rule.attr.outs:
         aspect_out = ctx.actions.declare_file(orig_out.name + ".aspect")
@@ -119,30 +129,30 @@ def _failing_aspect_impl(target, ctx):
             command = "false",
         )
     return struct(output_groups={
-        "aspect-out" : set([aspect_out]) })
+        "aspect-out" : depset([aspect_out]) })
 
 failing_aspect = aspect(implementation=_failing_aspect_impl)
 EOF
 touch BUILD
-cat > sample_workspace_status <<EOF
+cat > sample_workspace_status <<'EOF'
 #!/bin/sh
 echo SAMPLE_WORKSPACE_STATUS workspace_status_value
 EOF
 chmod  755 sample_workspace_status
 mkdir -p visibility/hidden
-cat > visibility/hidden/BUILD <<EOF
+cat > visibility/hidden/BUILD <<'EOF'
 genrule(
     name = "hello",
     outs = ["hello.txt"],
-    cmd = "echo Hello World > \$@",
+    cmd = "echo Hello World > $@",
 )
 EOF
-cat > visibility/BUILD <<EOF
+cat > visibility/BUILD <<'EOF'
 genrule(
     name = "cannotsee",
     outs = ["cannotsee.txt"],
     srcs = ["//visibility/hidden:hello"],
-    cmd = "cp \$< \$@",
+    cmd = "cp $< $@",
 )
 EOF
 mkdir -p failingtool
@@ -159,6 +169,21 @@ genrule(
     cmd = "$(location :tool) > $@",
 )
 EOF
+mkdir -p alias/actual
+cat > alias/actual/BUILD <<'EOF'
+genrule(
+  name = "it",
+  outs = ["it.txt"],
+  cmd = "touch $@",
+  visibility = ["//:__subpackages__"],
+)
+EOF
+cat > alias/BUILD <<'EOF'
+alias(
+  name = "it",
+  actual = "//alias/actual:it",
+)
+EOF
 }
 
 #### TESTS #############################################################
@@ -167,30 +192,100 @@ function test_basic() {
   # Basic properties of the event stream
   # - a completed target explicity requested should be reported
   # - after success the stream should close naturally, without any
-  #   reports about aborted events.
-  # - the command line is reported
+  #   reports about aborted events
+  # - the command line is reported in structured and unstructured form
   # - the target_kind is reported
   # - for single-configuration builds, there is precisely one configuration
   #   event reported; also make variables are shown
-  bazel test --build_event_text_file=$TEST_log pkg:true \
+  bazel test -k --build_event_text_file=$TEST_log --tool_tag=MyFancyTool pkg:true \
     || fail "bazel test failed"
   expect_log 'pkg:true'
   # Command line
-  expect_log 'args: "test"'
-  expect_log 'args: "--build_event_text_file='
-  expect_log 'args: "pkg:true"'
+  expect_log_once 'args: "test"'
+  expect_log_once 'args: "--build_event_text_file='
+  expect_log_once 'args: "-k"'
+  expect_log_once 'args: "--tool_tag=MyFancyTool"'
+  expect_log_once 'args: "pkg:true"'
+
+  # Options parsed. Since cmd_line lines are a substring of the equivalent
+  # explicit_cmd_line lines, we expect 2 instances for these.
+  expect_log_n 'cmd_line: "--tool_tag=MyFancyTool"' 2
+  expect_log_n 'cmd_line: "--keep_going"' 2
+  expect_log_once 'explicit_cmd_line: "--keep_going"'
+  expect_log_once 'explicit_cmd_line: "--tool_tag=MyFancyTool"'
+  expect_log_once 'tool_tag: "MyFancyTool"'
+
+  # Structured command line. Expect the explicit flags to appear twice,
+  # in the canonical and original command lines
+  expect_log 'command_line_label: "original"'
+  expect_log 'command_line_label: "canonical"'
+
+  expect_log_n 'combined_form: "-k"' 2
+  expect_log_n 'option_name: "keep_going"' 2
+  expect_log 'option_value: "1"' # too vague to count.
+
+  expect_log_n 'combined_form: "--tool_tag=MyFancyTool"' 2
+  expect_log_n 'option_name: "tool_tag"' 2
+  expect_log_n 'option_value: "MyFancyTool"' 2
+
+  expect_log_n "combined_form: \"--build_event_text_file=${TEST_log}\"" 2
+  expect_log_n 'option_name: "build_event_text_file"' 2
+  expect_log_n "option_value: \"${TEST_log}\"" 2
+
+  expect_log_n 'chunk: "test"' 2
+  expect_log_n 'chunk: "pkg:true"' 2
+
   # Build Finished
   expect_log 'build_finished'
   expect_log 'SUCCESS'
   expect_log 'finish_time'
   expect_not_log 'aborted'
-  # target kind for the sh_test
+
+  # Target kind for the sh_test
   expect_log 'target_kind:.*sh'
-  # test size should be reported
+
+  # Test size should be reported
   expect_log 'test_size: SMALL'
-  # configuration reported with make variables
+
+  # Configuration reported with make variables
   expect_log_once '^configuration '
   expect_log 'key: "TARGET_CPU"'
+}
+
+function test_target_information_early() {
+  # Verify that certain information is present in the log as part of
+  # the TargetConfigured event (verifying that it comes at least before
+  # the first TargetCompleted event, which is fine, if we only ask for
+  # a single target).
+  bazel test --build_event_text_file=$TEST_log pkg:true \
+    || fail "bazel test failed"
+  expect_log '^completed'
+  ed $TEST_log <<'EOF'
+1
+/^completed/+1,$d
+a
+...[cut here]
+.
+w
+q
+EOF
+  expect_log 'target_kind:.*sh'
+  expect_log 'test_size: SMALL'
+
+  bazel build --verbose_failures --build_event_text_file=$TEST_log \
+    pkg:output_files_and_tags || fail "bazel build failed"
+  expect_log '^completed'
+  ed $TEST_log <<'EOF'
+1
+/^completed/+1,$d
+a
+...[cut here]
+.
+w
+q
+EOF
+  expect_log 'tag1'
+  expect_log 'tag2'
 }
 
 function test_workspace_status() {
@@ -383,6 +478,8 @@ function test_aspect_artifacts() {
   expect_log 'name.*aspect-out'
   expect_log 'name.*out1.txt.aspect'
   expect_not_log 'aborted'
+  count=`grep '^configured' "${TEST_log}" | wc -l`
+  [ "${count}" -eq 2 ] || fail "Expected 2 configured events, found $count."
 }
 
 function test_failing_aspect() {
@@ -474,11 +571,11 @@ function test_root_cause_early() {
   # to be reported first.
   expect_log_once '^action'
   expect_log_once '^completed'
-  expect_not_log 'success'
+  expect_not_log 'success: true'
   local naction=`grep -n '^action' $TEST_log | cut -f 1 -d :`
   local ncomplete=`grep -n '^completed' $TEST_log | cut -f 1 -d :`
   [ $naction -lt $ncomplete ] \
-      || fail "failed action not before compelted target"
+      || fail "failed action not before completed target"
 }
 
 function test_action_conf() {
@@ -498,7 +595,6 @@ function test_loading_failure() {
   # being expanded.
   (bazel build --build_event_text_file=$TEST_log \
          //does/not/exist && fail "build failure expected") || true
-  expect_log_once '^progress '
   expect_log_once 'aborted'
   expect_log_once 'reason: LOADING_FAILURE'
   expect_log 'description.*BUILD file not found on package path'
@@ -552,9 +648,9 @@ function test_stdout_stderr_reported() {
   # independently in the stream) and still characteristic enough to not occur
   # in the stream by accident. Taking the first line mentioning the test name
   # is likely some form of progress report.
-  sample_line=`cat stderr.log | grep 'slow' | head -1 | tr '[]' '..'`
+  sample_line=`cat stderr.log | grep 'slow' | head -n 1 | tr '[]\r' '....'`
   echo "Sample regexp of stderr: ${sample_line}"
-  expect_log "stderr.*$sample_line"
+  expect_log "stderr.*${sample_line}"
 }
 
 function test_srcfiles() {
@@ -565,6 +661,53 @@ function test_srcfiles() {
   expect_log 'SUCCESS'
   expect_log_once '^configuration'
   expect_not_log 'aborted'
+}
+
+function test_test_fails_to_build() {
+  (bazel test --build_event_text_file=$TEST_log \
+         pkg:test_that_fails_to_build && fail "test failure expected") || true
+  expect_not_log '^test_summary'
+  expect_log 'last_message: true'
+  expect_log 'BUILD_FAILURE'
+}
+
+function test_no_tests_found() {
+  (bazel test --build_event_text_file=$TEST_log \
+         pkg:not_a_test && fail "failure expected") || true
+  expect_not_log '^test_summary'
+  expect_log 'last_message: true'
+  expect_log 'NO_TESTS_FOUND'
+}
+
+function test_no_tests_found_build_failure() {
+  (bazel test -k --build_event_text_file=$TEST_log \
+         pkg:not_a_test pkg:fails_to_build && fail "failure expected") || true
+  expect_not_log '^test_summary'
+  expect_log 'last_message: true'
+  expect_log 'yet testing was requested'
+  expect_log 'BUILD_FAILURE'
+}
+
+function test_alias() {
+  bazel build --build_event_text_file=$TEST_log alias/... \
+    || fail "build failed"
+  # If alias:it would be reported as the underlying alias/actual:it, then
+  # there would be no event for alias:it. So we can check the correct reporting
+  # by checking for aborted events.
+  expect_not_log 'aborted'
+
+  (echo 'g/^completed/?label?p'; echo 'q') | ed "${TEST_log}" 2>&1 | tail -n +2 > completed_labels
+  cat completed_labels
+  grep -q '//alias:it' completed_labels || fail "//alias:it not completed"
+  grep -q '//alias/actual:it' completed_labels \
+      || fail "//alias/actual:it not completed"
+  [ `cat completed_labels | wc -l` -eq 2 ] \
+      || fail "more than two targets completed"
+  rm -f completed_labels
+  bazel build --build_event_text_file=$TEST_log alias:it \
+    || fail "build failed"
+  expect_log 'label: "//alias:it"'
+  expect_not_log 'label: "//alias/actual'
 }
 
 run_suite "Integration tests for the build event stream"

@@ -126,7 +126,7 @@ public final class DotExpression extends Expression {
   }
 
   @Override
-  void validate(ValidationEnvironment env) throws EvalException {
-    object.validate(env);
+  public Kind kind() {
+    return Kind.DOT;
   }
 }

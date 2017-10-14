@@ -110,13 +110,14 @@ function test_bazelrc_option() {
     cp ${bazelrc} ${new_workspace_dir}/.${PRODUCT_NAME}rc
 
     echo "build --cpu=armeabi-v7a" >>.${PRODUCT_NAME}rc    # default bazelrc
-    $PATH_TO_BAZEL_BIN info >/dev/null 2>$TEST_log
+    $PATH_TO_BAZEL_BIN info --announce_rc >/dev/null 2>$TEST_log
     expect_log "Reading.*$(pwd)/.${PRODUCT_NAME}rc:
 .*--cpu=armeabi-v7a"
 
     cp .${PRODUCT_NAME}rc foo
     echo "build --cpu=armeabi-v7a"   >>foo         # non-default bazelrc
-    $PATH_TO_BAZEL_BIN --${PRODUCT_NAME}rc=foo info >/dev/null 2>$TEST_log
+    $PATH_TO_BAZEL_BIN --${PRODUCT_NAME}rc=foo info --announce_rc >/dev/null \
+      2>$TEST_log
     expect_log "Reading.*$(pwd)/foo:
 .*--cpu=armeabi-v7a"
 }
@@ -163,8 +164,10 @@ EOF
 
 # Integration test for option parser warnings.
 function test_warning_for_weird_parameters() {
-  bazel build --check_tests_up_to_date --check_up_to_date --nobuild >$TEST_log 2>&1
-  expect_log "WARNING: Option 'check_up_to_date' is implicitly defined by"
+  bazel build --check_tests_up_to_date --check_up_to_date --nobuild \
+      >$TEST_log 2>&1
+  expect_log "WARNING: A new value for option 'check_up_to_date' overrides a \
+previous implicit setting of that option by option 'check_tests_up_to_date'"
 }
 
 # glob function should not return values that are outside the package

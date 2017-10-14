@@ -26,18 +26,19 @@ using std::ostringstream;
 using std::string;
 using std::vector;
 
+static constexpr const char* BASH_BIN_PATH = "bash_bin_path";
+
 ExitCode BashBinaryLauncher::Launch() {
   string bash_binary = this->GetLaunchInfoByKey(BASH_BIN_PATH);
   // If specified bash binary path doesn't exist, then fall back to
   // bash.exe and hope it's in PATH.
-  if (!DoesFilePathExist(bash_binary)) {
+  if (!DoesFilePathExist(bash_binary.c_str())) {
     bash_binary = "bash.exe";
   }
 
   vector<string> origin_args = this->GetCommandlineArguments();
   ostringstream bash_command;
-  string bash_main_file =
-      this->Rlocation(this->GetLaunchInfoByKey(BASH_MAIN_FILE));
+  string bash_main_file = GetBinaryPathWithoutExtension(origin_args[0]);
   bash_command << GetEscapedArgument(bash_main_file);
   for (int i = 1; i < origin_args.size(); i++) {
     bash_command << ' ';

@@ -46,7 +46,7 @@ import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollectio
 import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
-import com.google.devtools.build.lib.syntax.SkylarkSemanticsOptions;
+import com.google.devtools.build.lib.syntax.SkylarkSemantics;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -158,7 +158,7 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public SkylarkSemanticsOptions getSkylarkSemantics() throws InterruptedException {
+    public SkylarkSemantics getSkylarkSemantics() throws InterruptedException {
       return original.getSkylarkSemantics();
     }
 
@@ -190,6 +190,7 @@ public final class AnalysisTestUtil {
     }
   }
 
+  /** A dummy WorkspaceStatusAction. */
   @Immutable
   public static final class DummyWorkspaceStatusAction extends WorkspaceStatusAction {
     private final String key;
@@ -254,6 +255,7 @@ public final class AnalysisTestUtil {
     }
   }
 
+  /** A WorkspaceStatusAction.Context that has no stable keys and no volatile keys. */
   @ExecutionStrategy(contextType = WorkspaceStatusAction.Context.class)
   public static class DummyWorkspaceStatusActionContext implements WorkspaceStatusAction.Context {
     @Override
@@ -304,6 +306,7 @@ public final class AnalysisTestUtil {
 
   public static final AnalysisEnvironment STUB_ANALYSIS_ENVIRONMENT = new StubAnalysisEnvironment();
 
+  /** An AnalysisEnvironment with stubbed-out methods. */
   public static class StubAnalysisEnvironment implements AnalysisEnvironment {
     @Override
     public void registerAction(ActionAnalysisMetadata... action) {
@@ -350,7 +353,7 @@ public final class AnalysisTestUtil {
     }
 
     @Override
-    public SkylarkSemanticsOptions getSkylarkSemantics() throws InterruptedException {
+    public SkylarkSemantics getSkylarkSemantics() throws InterruptedException {
       return null;
     }
 
@@ -432,20 +435,17 @@ public final class AnalysisTestUtil {
         hostConfiguration.getMiddlemanDirectory(RepositoryName.MAIN).getPath().toString(),
         "internal(host)");
 
-    if (targetConfiguration.useDynamicConfigurations()) {
-      // With dynamic configurations, the output paths that bin, genfiles, etc. refer to may
-      // or may not include the C++-contributed pieces. e.g. they may be
-      // bazel-out/gcc-X-glibc-Y-k8-fastbuild/ or they may be bazel-out/fastbuild/. This code
-      // adds support for the non-C++ case, too.
-      Map<String, String> prunedRootMap = new HashMap<>();
-      for (Map.Entry<String, String> root : rootMap.entrySet()) {
-        prunedRootMap.put(
-            OUTPUT_PATH_CPP_PREFIX_PATTERN.matcher(root.getKey()).replaceFirst(""),
-            root.getValue()
-        );
-      }
-      rootMap.putAll(prunedRootMap);
+    // The output paths that bin, genfiles, etc. refer to may or may not include the C++-contributed
+    // pieces. e.g. they may be bazel-out/gcc-X-glibc-Y-k8-fastbuild/ or they may be
+    // bazel-out/fastbuild/. This code adds support for the non-C++ case, too.
+    Map<String, String> prunedRootMap = new HashMap<>();
+    for (Map.Entry<String, String> root : rootMap.entrySet()) {
+      prunedRootMap.put(
+          OUTPUT_PATH_CPP_PREFIX_PATTERN.matcher(root.getKey()).replaceFirst(""),
+          root.getValue()
+      );
     }
+    rootMap.putAll(prunedRootMap);
 
     Set<String> files = new LinkedHashSet<>();
     for (Artifact artifact : artifacts) {

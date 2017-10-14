@@ -31,10 +31,11 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.EventReportingArtifacts;
 import com.google.devtools.build.lib.analysis.BuildInfoEvent;
 import com.google.devtools.build.lib.analysis.NoBuildEvent;
-import com.google.devtools.build.lib.analysis.NoBuildRequestFinishedEvent;
+import com.google.devtools.build.lib.analysis.extra.ExtraAction;
 import com.google.devtools.build.lib.buildeventstream.AbortedEvent;
 import com.google.devtools.build.lib.buildeventstream.AnnounceBuildEventTransportsEvent;
 import com.google.devtools.build.lib.buildeventstream.ArtifactGroupNamer;
+import com.google.devtools.build.lib.buildeventstream.BuildCompletingEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEventId;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.Aborted.AbortReason;
@@ -50,13 +51,11 @@ import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildInterruptedEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.BuildStartingEvent;
-import com.google.devtools.build.lib.buildtool.buildevent.TestingCompleteEvent;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetView;
 import com.google.devtools.build.lib.events.Event;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.events.Reporter;
-import com.google.devtools.build.lib.rules.extra.ExtraAction;
 import com.google.devtools.build.lib.util.Pair;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -97,7 +96,7 @@ public class BuildEventStreamer implements EventHandler {
   // Will be set to true if the build was invoked through "bazel test".
   private boolean isTestCommand;
 
-  private static final Logger log = Logger.getLogger(BuildEventStreamer.class.getName());
+  private static final Logger logger = Logger.getLogger(BuildEventStreamer.class.getName());
 
   /**
    * Provider for stdout and stderr output.
@@ -326,7 +325,7 @@ public class BuildEventStreamer implements EventHandler {
         Futures.allAsList(closeFutures).get();
         f.cancel(true);
       } catch (Exception e) {
-        log.severe("Failed to close a build event transport: " + e);
+        logger.severe("Failed to close a build event transport: " + e);
       }
     } finally {
       if (executor != null) {
@@ -375,7 +374,9 @@ public class BuildEventStreamer implements EventHandler {
 
   @Subscribe
   public void buildEvent(BuildEvent event) {
-    if (isActionWithoutError(event) || bufferUntilPrerequisitesReceived(event)) {
+    if (isActionWithoutError(event)
+        || bufferUntilPrerequisitesReceived(event)
+        || isVacuousTestSummary(event)) {
       return;
     }
 
@@ -411,9 +412,7 @@ public class BuildEventStreamer implements EventHandler {
       buildEvent(freedEvent);
     }
 
-    if (event instanceof BuildCompleteEvent
-        || event instanceof TestingCompleteEvent
-        || event instanceof NoBuildRequestFinishedEvent) {
+    if (event instanceof BuildCompletingEvent) {
       buildComplete();
     }
 
@@ -494,5 +493,10 @@ public class BuildEventStreamer implements EventHandler {
       }
     }
     return false;
+  }
+
+  /** Return true if the test summary contains no actual test runs. */
+  private boolean isVacuousTestSummary(BuildEvent event) {
+    return event instanceof TestSummary && (((TestSummary) event).totalRuns() == 0);
   }
 }

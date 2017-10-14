@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.syntax;
 
 import com.google.common.base.Strings;
-import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.syntax.Concatable.Concatter;
 import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
@@ -86,7 +85,7 @@ public final class BinaryOperatorExpression extends Expression {
   /** Implements the "in" operator. */
   private static boolean in(Object lval, Object rval, Environment env, Location location)
       throws EvalException {
-    if (env.getSemantics().incompatibleDepsetIsNotIterable && rval instanceof SkylarkNestedSet) {
+    if (env.getSemantics().incompatibleDepsetIsNotIterable() && rval instanceof SkylarkNestedSet) {
       throw new EvalException(
           location,
           "argument of type '"
@@ -261,9 +260,8 @@ public final class BinaryOperatorExpression extends Expression {
   }
 
   @Override
-  void validate(ValidationEnvironment env) throws EvalException {
-    lhs.validate(env);
-    rhs.validate(env);
+  public Kind kind() {
+    return Kind.BINARY_OPERATOR;
   }
 
   /** Implements Operator.PLUS. */
@@ -272,7 +270,7 @@ public final class BinaryOperatorExpression extends Expression {
       throws EvalException {
     // int + int
     if (lval instanceof Integer && rval instanceof Integer) {
-      if (env.getSemantics().incompatibleCheckedArithmetic) {
+      if (env.getSemantics().incompatibleCheckedArithmetic()) {
         return Math.addExact((Integer) lval, (Integer) rval);
       } else {
         return ((Integer) lval).intValue() + ((Integer) rval).intValue();
@@ -291,22 +289,22 @@ public final class BinaryOperatorExpression extends Expression {
     }
 
     if ((lval instanceof Tuple) && (rval instanceof Tuple)) {
-      return Tuple.copyOf(Iterables.concat((Tuple) lval, (Tuple) rval));
+      return Tuple.concat((Tuple<?>) lval, (Tuple<?>) rval);
     }
 
     if ((lval instanceof MutableList) && (rval instanceof MutableList)) {
-      if (isAugmented && env.getSemantics().incompatibleListPlusEqualsInplace) {
+      if (isAugmented && env.getSemantics().incompatibleListPlusEqualsInplace()) {
         @SuppressWarnings("unchecked")
         MutableList<Object> list = (MutableList) lval;
-        list.addAll((MutableList<?>) rval, location, env);
+        list.addAll((MutableList<?>) rval, location, env.mutability());
         return list;
       } else {
-        return MutableList.concat((MutableList<?>) lval, (MutableList<?>) rval, env);
+        return MutableList.concat((MutableList<?>) lval, (MutableList<?>) rval, env.mutability());
       }
     }
 
     if (lval instanceof SkylarkDict && rval instanceof SkylarkDict) {
-      if (env.getSemantics().incompatibleDisallowDictPlus) {
+      if (env.getSemantics().incompatibleDisallowDictPlus()) {
         throw new EvalException(
             location,
             "The `+` operator for dicts is deprecated and no longer supported. Please use the "
@@ -346,7 +344,7 @@ public final class BinaryOperatorExpression extends Expression {
   private static Object minus(Object lval, Object rval, Environment env, Location location)
       throws EvalException {
     if (lval instanceof Integer && rval instanceof Integer) {
-      if (env.getSemantics().incompatibleCheckedArithmetic) {
+      if (env.getSemantics().incompatibleCheckedArithmetic()) {
         return Math.subtractExact((Integer) lval, (Integer) rval);
       } else {
         return ((Integer) lval).intValue() - ((Integer) rval).intValue();
@@ -371,18 +369,17 @@ public final class BinaryOperatorExpression extends Expression {
 
     if (number != null) {
       if (otherFactor instanceof Integer) {
-        if (env.getSemantics().incompatibleCheckedArithmetic) {
+        if (env.getSemantics().incompatibleCheckedArithmetic()) {
           return Math.multiplyExact(number, (Integer) otherFactor);
         } else {
-          return number.intValue() * ((Integer) otherFactor).intValue();
+          return number * ((Integer) otherFactor);
         }
       } else if (otherFactor instanceof String) {
         // Similar to Python, a factor < 1 leads to an empty string.
-        return Strings.repeat((String) otherFactor, Math.max(0, number.intValue()));
-      } else if (otherFactor instanceof MutableList) {
+        return Strings.repeat((String) otherFactor, Math.max(0, number));
+      } else if (otherFactor instanceof SkylarkList) {
         // Similar to Python, a factor < 1 leads to an empty string.
-        return MutableList.duplicate(
-            (MutableList<?>) otherFactor, Math.max(0, number.intValue()), env);
+        return ((SkylarkList<?>) otherFactor).repeat(number, env.mutability());
       }
     }
     throw typeException(lval, rval, Operator.MULT, location);
@@ -430,9 +427,9 @@ public final class BinaryOperatorExpression extends Expression {
       String pattern = (String) lval;
       try {
         if (rval instanceof Tuple) {
-          return Printer.getPrinter(env).formatWithList(pattern, (Tuple) rval).toString();
+          return Printer.formatWithList(pattern, (Tuple) rval);
         }
-        return Printer.getPrinter(env).format(pattern, rval).toString();
+        return Printer.format(pattern, rval);
       } catch (IllegalFormatException e) {
         throw new EvalException(location, e.getMessage());
       }

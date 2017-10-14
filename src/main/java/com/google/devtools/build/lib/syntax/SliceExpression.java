@@ -55,7 +55,7 @@ public final class SliceExpression extends Expression {
     boolean endIsDefault =
         (end instanceof Identifier) && ((Identifier) end).getName().equals("None");
     boolean stepIsDefault =
-        (step instanceof IntegerLiteral) && ((IntegerLiteral) step).getValue().equals(1);
+        (step instanceof IntegerLiteral) && ((IntegerLiteral) step).getValue() == 1;
 
     object.prettyPrint(buffer);
     buffer.append('[');
@@ -88,9 +88,8 @@ public final class SliceExpression extends Expression {
     Location loc = getLocation();
 
     if (objValue instanceof SkylarkList) {
-      SkylarkList<?> list = (SkylarkList<?>) objValue;
-      Object slice = list.getSlice(startValue, endValue, stepValue, loc);
-      return SkylarkType.convertToSkylark(slice, env);
+      return ((SkylarkList<?>) objValue).getSlice(
+          startValue, endValue, stepValue, loc, env.mutability());
     } else if (objValue instanceof String) {
       String string = (String) objValue;
       List<Integer> indices = EvalUtils.getSliceIndices(startValue, endValue, stepValue,
@@ -121,7 +120,7 @@ public final class SliceExpression extends Expression {
   }
 
   @Override
-  void validate(ValidationEnvironment env) throws EvalException {
-    object.validate(env);
+  public Kind kind() {
+    return Kind.SLICE;
   }
 }

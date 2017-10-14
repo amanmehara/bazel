@@ -85,7 +85,7 @@ public final class IndexExpression extends Expression {
   }
 
   @Override
-  void validate(ValidationEnvironment env) throws EvalException {
-    object.validate(env);
+  public Kind kind() {
+    return Kind.INDEX;
   }
 }

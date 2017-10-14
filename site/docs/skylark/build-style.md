@@ -15,6 +15,18 @@ generate `BUILD` files.
 
 `BUILD` file formatting must match the output of `buildifier`.
 
+## Contents
+
+- [Formatting example](#formatting-example)
+- [File structure](#file-structure)
+- [References to targets in the current package](#references-to-targets-in-the-current-package)
+- [Target naming](#target-naming)
+- [Visibility](#visibility)
+- [Dependencies](#dependencies)
+- [Globs](#globs)
+- [Other conventions](#other-conventions)
+- [Differences with Python style guide](#differences-with-python-style-guide)
+
 ## Formatting example
 
 ```python
@@ -123,6 +135,12 @@ Package-local dependencies should be listed first and referred to in a way
 compatible with the
 [References to targets in the current package](#references-to-targets-in-the-current-package)
 section above (not by their absolute package name).
+
+Prefer to list dependencies directly, as a single list. Putting the "common"
+dependencies of several targets into a variable reduces maintainability, makes
+it impossible for tools to change the dependencies of a target and can lead to
+unused dependencies.
+
 
 ## Globs
 

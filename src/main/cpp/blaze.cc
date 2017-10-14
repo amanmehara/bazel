@@ -561,7 +561,7 @@ static void VerifyJavaVersionAndSetJvm() {
     string jvm_version = GetJvmVersion(exe);
 
     // Compare that jvm_version is found and at least the one specified.
-    if (jvm_version.size() == 0) {
+    if (jvm_version.empty()) {
       die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
           "Java version not detected while at least %s is needed.\n"
           "Please set JAVA_HOME.",
@@ -641,7 +641,7 @@ static void StartStandalone(const WorkspaceLayout *workspace_layout,
         globals->options->product_name.c_str(), product.c_str());
   }
   vector<string> jvm_args_vector = GetArgumentArray();
-  if (command != "") {
+  if (!command.empty()) {
     jvm_args_vector.push_back(command);
     AddLoggingArgs(&jvm_args_vector);
   }
@@ -761,6 +761,7 @@ static void StartServerAndConnect(const WorkspaceLayout *workspace_layout,
 
     std::this_thread::sleep_until(next_attempt_time);
     if (!server_startup->IsStillAlive()) {
+      globals->option_processor->PrintStartupOptionsProvenanceMessage();
       fprintf(stderr,
               "\nunexpected pipe read status: %s\n"
               "Server presumed dead. Now printing '%s':\n",
@@ -947,6 +948,27 @@ static void ExtractData(const string &self_path) {
         continue;
       }
       if (!blaze_util::CanReadFile(path)) {
+        // TODO(laszlocsomor): remove the following `#if 1` block after I or
+        // somebody else fixed https://github.com/bazelbuild/bazel/issues/3618.
+#if 1
+        fprintf(stderr,
+                "DEBUG: corrupt installation: file '%s' missing. "
+                "Dumping debug data.\n",
+                path.c_str());
+        string p = path;
+        while (!p.empty()) {
+          fprintf(stderr, "DEBUG: p=(%s), exists=%d, isdir=%d, canread=%d\n",
+                  p.c_str(), blaze_util::PathExists(p) ? 1 : 0,
+                  blaze_util::IsDirectory(p) ? 1 : 0,
+                  blaze_util::CanReadFile(p) ? 1 : 0);
+          string parent = blaze_util::Dirname(p);
+          if (parent == p) {
+            break;
+          } else {
+            p = parent;
+          }
+        }
+#endif
         die(blaze_exit_code::LOCAL_ENVIRONMENTAL_ERROR,
             "Error: corrupt installation: file '%s' missing."
             " Please remove '%s' and try again.",
@@ -1148,6 +1170,7 @@ static void ParseOptions(int argc, const char *argv[]) {
           args, globals->workspace, globals->cwd, &error);
 
   if (parse_exit_code != blaze_exit_code::SUCCESS) {
+    globals->option_processor->PrintStartupOptionsProvenanceMessage();
     die(parse_exit_code, "%s", error.c_str());
   }
   globals->options = globals->option_processor->GetParsedStartupOptions();
@@ -1227,7 +1250,10 @@ static void ComputeBaseDirectories(const WorkspaceLayout *workspace_layout,
       blaze_util::JoinPath(globals->options->output_base, "server/jvm.out");
 }
 
-static void CheckEnvironmentOrDie() {
+// Prepares the environment to be suitable to start a JVM.
+// Changes made to the environment in this function *will not* be part
+// of '--client_env'.
+static void PrepareEnvironmentForJvm() {
   if (!blaze::GetEnv("http_proxy").empty()) {
     PrintWarning("ignoring http_proxy in environment.");
     blaze::UnsetEnv("http_proxy");
@@ -1269,8 +1295,6 @@ static void CheckEnvironmentOrDie() {
   blaze::SetEnv("LANGUAGE", "en_US.ISO-8859-1");
   blaze::SetEnv("LC_ALL", "en_US.ISO-8859-1");
   blaze::SetEnv("LC_CTYPE", "en_US.ISO-8859-1");
-
-  blaze::DetectBashOrDie();
 }
 
 static string CheckAndGetBinaryPath(const string &argv0) {
@@ -1339,13 +1363,19 @@ int Main(int argc, const char *argv[], WorkspaceLayout *workspace_layout,
 
   // Must be done before command line parsing.
   ComputeWorkspace(workspace_layout);
+
+  // Must be done before command line parsing.
+  // ParseOptions already populate --client_env, so detect bash before it
+  // happens.
+  DetectBashOrDie();
+
   globals->binary_path = CheckAndGetBinaryPath(argv[0]);
   ParseOptions(argc, argv);
 
   blaze::SetDebugLog(globals->options->client_debug);
   debug_log("Debug logging active");
 
-  CheckEnvironmentOrDie();
+  PrepareEnvironmentForJvm();
   blaze::CreateSecureOutputRoot(globals->options->output_user_root);
 
   const string self_path = GetSelfPath();
@@ -1599,7 +1629,7 @@ unsigned int GrpcBlazeServer::Communicate() {
 
   vector<string> arg_vector;
   string command = globals->option_processor->GetCommand();
-  if (command != "") {
+  if (!command.empty()) {
     arg_vector.push_back(command);
     AddLoggingArgs(&arg_vector);
   }
@@ -1622,6 +1652,17 @@ unsigned int GrpcBlazeServer::Communicate() {
   if (globals->options->invocation_policy != NULL &&
       strlen(globals->options->invocation_policy) > 0) {
     request.set_invocation_policy(globals->options->invocation_policy);
+  }
+
+  const StartupOptions *startup_options(
+      globals->option_processor->GetParsedStartupOptions());
+  for (const auto &startup_option :
+       startup_options->original_startup_options_) {
+    command_server::StartupOption *proto_option_field =
+        request.add_startup_options();
+    request.add_startup_options();
+    proto_option_field->set_source(startup_option.source);
+    proto_option_field->set_option(startup_option.value);
   }
 
   grpc::ClientContext context;
@@ -1685,7 +1726,7 @@ unsigned int GrpcBlazeServer::Communicate() {
       Cancel();
     }
 
-    if (!command_id_set && response.command_id().size() > 0) {
+    if (!command_id_set && !response.command_id().empty()) {
       std::unique_lock<std::mutex> lock(cancel_thread_mutex_);
       command_id_ = response.command_id();
       command_id_set = true;

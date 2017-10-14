@@ -20,11 +20,11 @@ import static com.google.devtools.build.lib.packages.BuildType.LICENSE;
 import static com.google.devtools.build.lib.syntax.Type.STRING;
 
 import com.google.devtools.build.lib.analysis.BaseRuleClasses;
+import com.google.devtools.build.lib.analysis.MakeVariableInfo;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
 import com.google.devtools.build.lib.packages.RuleClass;
 import com.google.devtools.build.lib.packages.RuleClass.Builder;
-import com.google.devtools.build.lib.rules.MakeVariableProvider;
 import com.google.devtools.build.lib.util.FileTypeSet;
 
 /** Rule definition for {@code java_runtime} */
@@ -32,7 +32,7 @@ public final class JavaRuntimeRule implements RuleDefinition {
   @Override
   public RuleClass build(Builder builder, RuleDefinitionEnvironment env) {
     return builder
-        .advertiseProvider(MakeVariableProvider.class)
+        .advertiseProvider(MakeVariableInfo.class)
         /* <!-- #BLAZE_RULE(java_runtime).ATTRIBUTE(srcs) -->
         All files in the runtime.
         <!-- #END_BLAZE_RULE.ATTRIBUTE --> */

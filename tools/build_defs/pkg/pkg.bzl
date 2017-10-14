@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Rules for manipulation of various packaging."""
+load(":path.bzl", "dest_path", "compute_data_path")
 
 # Filetype to restrict inputs
 tar_filetype = [".tar", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2"]
 deb_filetype = [".deb", ".udeb"]
-load(":path.bzl", "dest_path", "compute_data_path")
 
 def _pkg_tar_impl(ctx):
   """Implementation of the pkg_tar rule."""
@@ -31,7 +31,7 @@ def _pkg_tar_impl(ctx):
       "--owner=" + ctx.attr.owner,
       "--owner_name=" + ctx.attr.ownername,
       ]
-  file_inputs = ctx.files.srcs
+  file_inputs = ctx.files.srcs[:]
   args += ["--file=%s=%s" % (f.path, dest_path(f, data_path))
            for f in ctx.files.srcs]
   for target, f_dest_path in ctx.attr.files.items():
@@ -193,7 +193,10 @@ def pkg_tar(**kwargs):
   if "srcs" not in kwargs:
     if "files" in kwargs:
       if not hasattr(kwargs["files"], "items"):
-        print("pkg_tar: renaming non-dict `files` attribute to `srcs`")
+        label = "%s//%s:%s" % (REPOSITORY_NAME, PACKAGE_NAME, kwargs["name"])
+        print("%s: you provided a non dictionary to the pkg_tar `files` attribute. " % (label,) +
+              "This attribute was renamed to `srcs`. " +
+              "Consider renaming it in your BUILD file.")
         kwargs["srcs"] = kwargs.pop("files")
   _real_pkg_tar(**kwargs)
 

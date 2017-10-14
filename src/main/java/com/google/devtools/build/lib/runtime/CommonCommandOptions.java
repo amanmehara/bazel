@@ -154,20 +154,6 @@ public class CommonCommandOptions extends OptionsBase {
   )
   public List<Map.Entry<String, String>> clientEnv;
 
-  @Deprecated
-  @Option(
-    name = "ignore_client_env",
-    defaultValue = "false",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    metadataTags = {OptionMetadataTag.HIDDEN, OptionMetadataTag.DEPRECATED},
-    effectTags = {OptionEffectTag.NO_OP},
-    deprecationWarning = "Deprecated, no-op.",
-    help = "Deprecated, no-op."
-  )
-  // TODO(laszlocsomor, dslomov) 2017-03-07: remove this flag after 2017-06-01 (~3 months from now)
-  // and all of its occurrences.
-  public boolean ignoreClientEnv;
-
   @Option(
     name = "client_cwd",
     defaultValue = "",
@@ -190,9 +176,10 @@ public class CommonCommandOptions extends OptionsBase {
   public boolean announceRcOptions;
 
   /**
-   * These are the actual default overrides. Each value is a pair of (command name, value).
+   * These are the actual default overrides. Each value is a tuple of (bazelrc index, command name,
+   * value). The blazerc index is a number used to find the blazerc in --rc_source's values.
    *
-   * <p>For example: "--default_override=build=--cpu=piii"
+   * <p>For example: "--default_override=rc:build=--cpu=piii"
    */
   @Option(
     name = "default_override",
@@ -284,6 +271,17 @@ public class CommonCommandOptions extends OptionsBase {
     help = "Deprecated."
   )
   public boolean gcWatchdog;
+
+  @Option(
+    name = "experimental_oom_more_eagerly_threshold",
+    defaultValue = "100",
+    documentationCategory = OptionDocumentationCategory.EXECUTION_STRATEGY,
+    effectTags = {OptionEffectTag.HOST_MACHINE_RESOURCE_OPTIMIZATIONS},
+    help =
+        "If this flag is set to a value less than 100, Blaze will OOM if, after two full GC's, more"
+            + "than this percentage of the (old gen) heap is still occupied."
+  )
+  public int oomMoreEagerlyThreshold;
 
   @Option(
     name = "startup_time",

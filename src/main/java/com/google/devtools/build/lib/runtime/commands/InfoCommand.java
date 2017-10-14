@@ -67,8 +67,8 @@ public class InfoCommand implements BlazeCommand {
       name = "show_make_env",
       defaultValue = "false",
       category = "misc",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.UNKNOWN},
+      documentationCategory = OptionDocumentationCategory.LOGGING,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.TERMINAL_OUTPUT},
       help = "Include the \"Make\" environment in the output."
     )
     public boolean showMakeEnvironment;
@@ -120,10 +120,11 @@ public class InfoCommand implements BlazeCommand {
           // is available here.
           env.setupPackageCache(
               optionsProvider, runtime.getDefaultsPackageContent(optionsProvider));
+          env.getSkyframeExecutor().setConfigurationFragmentFactories(
+              runtime.getConfigurationFragmentFactories());
           // TODO(bazel-team): What if there are multiple configurations? [multi-config]
-          env.getSkyframeExecutor().setConfigurationFactory(runtime.getConfigurationFactory());
           return env.getSkyframeExecutor().getConfiguration(
-              env.getReporter(), runtime.createBuildOptions(optionsProvider));
+              env.getReporter(), runtime.createBuildOptions(optionsProvider), /*keepGoing=*/true);
         } catch (InvalidConfigurationException e) {
           env.getReporter().handle(Event.error(e.getMessage()));
           throw new ExitCausingRuntimeException(ExitCode.COMMAND_LINE_ERROR);

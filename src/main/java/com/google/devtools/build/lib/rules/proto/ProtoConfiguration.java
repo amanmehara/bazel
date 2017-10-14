@@ -123,8 +123,8 @@ public class ProtoConfiguration extends Fragment {
       defaultValue = "strict",
       converter = BuildConfiguration.StrictDepsConverter.class,
       category = "semantics",
-      documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
-      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+      effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS, OptionEffectTag.EAGERNESS_TO_EXIT},
       metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
       help =
           "If true, checks that a proto_library target explicitly declares all directly "
@@ -154,22 +154,34 @@ public class ProtoConfiguration extends Fragment {
     )
     public List<String> ccProtoLibrarySourceSuffixes;
 
+    // TODO(b/64032754): Remove once there's no 'correctRollupTransitiveProtoRuntimes' in the global
+    //     blazerc.
     @Option(
       name = "correctRollupTransitiveProtoRuntimes",
-      defaultValue = "false",
+      defaultValue = "true",
       category = "rollout",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
       metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
-      help =
-          "Roll-out flag for changing behavior of proto runtime roll up. "
-              + "See commit description for details. DO NOT USE."
+      help = "ignored"
     )
     public boolean correctRollupTransitiveProtoRuntimes;
 
+    // TODO(b/62710272): Remove once there's no 'jplNonStrictDepsLikePl' in the global blazerc.
+    @Option(
+      name = "jplNonStrictDepsLikePl",
+      defaultValue = "true",
+      category = "rollout",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
+      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+      help = "ignored"
+    )
+    public boolean jplNonStrictDepsLikePl;
+
     @Override
-    public FragmentOptions getHost(boolean fallback) {
-      Options host = (Options) super.getHost(fallback);
+    public FragmentOptions getHost() {
+      Options host = (Options) super.getHost();
       host.protoCompiler = protoCompiler;
       host.protocOpts = protocOpts;
       host.experimentalProtoExtraActions = experimentalProtoExtraActions;
@@ -180,7 +192,6 @@ public class ProtoConfiguration extends Fragment {
       host.strictProtoDeps = strictProtoDeps;
       host.ccProtoLibraryHeaderSuffixes = ccProtoLibraryHeaderSuffixes;
       host.ccProtoLibrarySourceSuffixes = ccProtoLibrarySourceSuffixes;
-      host.correctRollupTransitiveProtoRuntimes = correctRollupTransitiveProtoRuntimes;
       return host;
     }
   }
@@ -259,7 +270,4 @@ public class ProtoConfiguration extends Fragment {
     return ccProtoLibrarySourceSuffixes;
   }
 
-  public boolean correctRollupTransitiveProtoRuntimes() {
-    return options.correctRollupTransitiveProtoRuntimes;
-  }
 }

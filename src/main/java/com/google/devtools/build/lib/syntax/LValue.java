@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.syntax;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.events.Location;
+import com.google.devtools.build.lib.syntax.SkylarkList.MutableList;
 import com.google.devtools.build.lib.util.Preconditions;
 import java.io.IOException;
 import java.util.Collection;
@@ -119,9 +120,10 @@ public final class LValue extends ASTNode {
     if (object instanceof SkylarkDict) {
       SkylarkDict<Object, Object> dict = (SkylarkDict<Object, Object>) object;
       dict.put(key, value, loc, env);
-    } else if (object instanceof SkylarkList) {
-      SkylarkList<Object> list = (SkylarkList<Object>) object;
-      list.set(key, value, loc, env);
+    } else if (object instanceof MutableList) {
+      MutableList<Object> list = (MutableList<Object>) object;
+      int index = EvalUtils.getSequenceIndex(key, list.size(), loc);
+      list.set(index, value, loc, env.mutability());
     } else {
       throw new EvalException(
           loc,
@@ -194,30 +196,32 @@ public final class LValue extends ASTNode {
   }
 
   /**
-   *  Returns all names bound by this LValue.
+   * Returns all names bound by this LValue.
    *
-   *  Examples:
-   *  <ul>
-   *  <li><{@code x = ...} binds x.</li>
-   *  <li><{@code x, [y,z] = ..} binds x, y, z.</li>
-   *  <li><{@code x[5] = ..} does not bind any names.</li>
-   *  </ul>
+   * <p>Examples:
+   *
+   * <ul>
+   *   <li><{@code x = ...} binds x.
+   *   <li><{@code x, [y,z] = ..} binds x, y, z.
+   *   <li><{@code x[5] = ..} does not bind any names.
+   * </ul>
    */
-  public ImmutableSet<String> boundNames() {
-    ImmutableSet.Builder<String> result = ImmutableSet.builder();
-    collectBoundNames(expr, result);
+  public ImmutableSet<Identifier> boundIdentifiers() {
+    ImmutableSet.Builder<Identifier> result = ImmutableSet.builder();
+    collectBoundIdentifiers(expr, result);
     return result.build();
   }
 
-  private static void collectBoundNames(Expression lhs, ImmutableSet.Builder<String> result) {
+  private static void collectBoundIdentifiers(
+      Expression lhs, ImmutableSet.Builder<Identifier> result) {
     if (lhs instanceof Identifier) {
-      result.add(((Identifier) lhs).getName());
+      result.add((Identifier) lhs);
       return;
     }
     if (lhs instanceof ListLiteral) {
       ListLiteral variables = (ListLiteral) lhs;
       for (Expression expression : variables.getElements()) {
-        collectBoundNames(expression, result);
+        collectBoundIdentifiers(expression, result);
       }
     }
   }
@@ -225,25 +229,6 @@ public final class LValue extends ASTNode {
   @Override
   public void accept(SyntaxTreeVisitor visitor) {
     visitor.visit(this);
-  }
-
-  void validate(ValidationEnvironment env, Location loc) throws EvalException {
-    validate(env, loc, expr);
-  }
-
-  private static void validate(ValidationEnvironment env, Location loc, Expression expr)
-      throws EvalException {
-    if (expr instanceof Identifier) {
-      env.declare(((Identifier) expr).getName(), loc);
-    } else if (expr instanceof IndexExpression) {
-      expr.validate(env);
-    } else if (expr instanceof ListLiteral) {
-      for (Expression e : ((ListLiteral) expr).getElements()) {
-        validate(env, loc, e);
-      }
-    } else {
-      throw new EvalException(loc, "cannot assign to '" + expr + "'");
-    }
   }
 
   @Override

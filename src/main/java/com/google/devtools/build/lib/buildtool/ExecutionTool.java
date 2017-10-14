@@ -13,8 +13,8 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
+import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
@@ -44,11 +44,13 @@ import com.google.devtools.build.lib.actions.ExecutionStrategy;
 import com.google.devtools.build.lib.actions.Executor;
 import com.google.devtools.build.lib.actions.ExecutorInitException;
 import com.google.devtools.build.lib.actions.LocalHostCapacity;
+import com.google.devtools.build.lib.actions.PackageRoots;
 import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.SpawnActionContext;
 import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.actions.cache.ActionCache;
+import com.google.devtools.build.lib.actions.cache.Protos.ActionCacheStatistics;
 import com.google.devtools.build.lib.analysis.BuildView.AnalysisResult;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
@@ -57,6 +59,7 @@ import com.google.devtools.build.lib.analysis.WorkspaceStatusAction;
 import com.google.devtools.build.lib.analysis.actions.SymlinkTreeActionContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
+import com.google.devtools.build.lib.analysis.test.TestActionContext;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionPhaseCompleteEvent;
 import com.google.devtools.build.lib.buildtool.buildevent.ExecutionStartingEvent;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
@@ -71,7 +74,6 @@ import com.google.devtools.build.lib.exec.CheckUpToDateFilter;
 import com.google.devtools.build.lib.exec.ExecutionOptions;
 import com.google.devtools.build.lib.exec.ExecutorBuilder;
 import com.google.devtools.build.lib.exec.FilesetActionContextImpl;
-import com.google.devtools.build.lib.exec.OutputService;
 import com.google.devtools.build.lib.exec.SingleBuildFileCache;
 import com.google.devtools.build.lib.exec.SymlinkTreeStrategy;
 import com.google.devtools.build.lib.profiler.AutoProfiler;
@@ -79,12 +81,12 @@ import com.google.devtools.build.lib.profiler.ProfilePhase;
 import com.google.devtools.build.lib.profiler.Profiler;
 import com.google.devtools.build.lib.profiler.ProfilerTask;
 import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
-import com.google.devtools.build.lib.rules.test.TestActionContext;
 import com.google.devtools.build.lib.runtime.BlazeModule;
 import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.skyframe.AspectValue;
 import com.google.devtools.build.lib.skyframe.Builder;
+import com.google.devtools.build.lib.skyframe.OutputService;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.ExitCode;
@@ -96,7 +98,9 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -104,9 +108,11 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -115,7 +121,7 @@ import java.util.logging.Logger;
  *
  * <p>This is only intended for use by {@link BuildTool}.
  *
- * <p>This class contains an ActionCache, and refers to the BlazeRuntime's BuildView and
+ * <p>This class contains an ActionCache, and refers to the Blaze Runtime's BuildView and
  * PackageCache.
  *
  * @see BuildTool
@@ -137,6 +143,7 @@ public class ExecutionTool {
         for (ActionContext strategy : provider.getActionContexts()) {
           ExecutionStrategy annotation =
               strategy.getClass().getAnnotation(ExecutionStrategy.class);
+          // TODO(ulfjack): Don't silently ignore action contexts without annotation.
           if (annotation != null) {
             defaultClassMap.put(annotation.contextType(), strategy);
 
@@ -165,7 +172,7 @@ public class ExecutionTool {
     }
   }
 
-  static final Logger log = Logger.getLogger(ExecutionTool.class.getName());
+  static final Logger logger = Logger.getLogger(ExecutionTool.class.getName());
 
   private final CommandEnvironment env;
   private final BlazeRuntime runtime;
@@ -229,7 +236,7 @@ public class ExecutionTool {
         
     this.actionContextProviders = builder.getActionContextProviders();
     for (ActionContextProvider provider : actionContextProviders) {
-      provider.init(fileCache, prefetcher);
+      provider.init(fileCache);
     }
 
     StrategyConverter strategyConverter = new StrategyConverter(actionContextProviders);
@@ -316,19 +323,23 @@ public class ExecutionTool {
   }
 
   /**
-   * Performs the execution phase (phase 3) of the build, in which the Builder
-   * is applied to the action graph to bring the targets up to date. (This
-   * function will return prior to execution-proper if --nobuild was specified.)
+   * Performs the execution phase (phase 3) of the build, in which the Builder is applied to the
+   * action graph to bring the targets up to date. (This function will return prior to
+   * execution-proper if --nobuild was specified.)
+   *
    * @param buildId UUID of the build id
    * @param analysisResult the analysis phase output
    * @param buildResult the mutable build result
    * @param packageRoots package roots collected from loading phase and BuildConfigurationCollection
-   * creation
+   *     creation. May be empty if {@link
+   *     SkyframeExecutor#getForcedSingleSourceRootIfNoExecrootSymlinkCreation} is false.
    */
-  void executeBuild(UUID buildId, AnalysisResult analysisResult,
+  void executeBuild(
+      UUID buildId,
+      AnalysisResult analysisResult,
       BuildResult buildResult,
       BuildConfigurationCollection configurations,
-      ImmutableMap<PackageIdentifier, Path> packageRoots,
+      PackageRoots packageRoots,
       TopLevelArtifactContext topLevelArtifactContext)
       throws BuildFailedException, InterruptedException, TestExecException, AbruptExitException {
     Stopwatch timer = Stopwatch.createStarted();
@@ -353,19 +364,29 @@ public class ExecutionTool {
     // Must be created after the output path is created above.
     createActionLogDirectory();
 
-    List<BuildConfiguration> targetConfigurations = configurations.getTargetConfigurations();
-    BuildConfiguration targetConfiguration = targetConfigurations.size() == 1
-        ? targetConfigurations.get(0) : null;
-    if (targetConfigurations.size() == 1) {
-      String productName = runtime.getProductName();
-      String workspaceName = env.getWorkspaceName();
-      OutputDirectoryLinksUtils.createOutputDirectoryLinks(
-          workspaceName, env.getWorkspace(), env.getDirectories().getExecRoot(workspaceName),
-          env.getDirectories().getOutputPath(workspaceName), getReporter(), targetConfiguration,
-          request.getBuildOptions().getSymlinkPrefix(productName), productName);
-    }
+    // Create convenience symlinks from the configurations actually used by the requested targets.
+    // Symlinks will be created if all such configurations would point the symlink to the same path;
+    // if this does not hold, stale symlinks (if present from a previous invocation) will be
+    // deleted instead.
+    Set<BuildConfiguration> targetConfigurations =
+        request.getBuildOptions().useTopLevelTargetsForSymlinks()
+        ? analysisResult
+            .getTargetsToBuild()
+            .stream()
+            .map(ConfiguredTarget::getConfiguration)
+            .filter(configuration -> configuration != null)
+            .distinct()
+            .collect(toImmutableSet())
+        : ImmutableSet.copyOf(configurations.getTargetConfigurations());
+    String productName = runtime.getProductName();
+    String workspaceName = env.getWorkspaceName();
+    OutputDirectoryLinksUtils.createOutputDirectoryLinks(
+        workspaceName, env.getWorkspace(), env.getDirectories().getExecRoot(workspaceName),
+        env.getDirectories().getOutputPath(workspaceName), getReporter(), targetConfigurations,
+        request.getBuildOptions().getSymlinkPrefix(productName), productName);
 
     ActionCache actionCache = getActionCache();
+    actionCache.resetStatistics();
     SkyframeExecutor skyframeExecutor = env.getSkyframeExecutor();
     Builder builder = createBuilder(
         request, actionCache, skyframeExecutor, modifiedOutputFiles);
@@ -402,7 +423,10 @@ public class ExecutionTool {
 
     if (request.isRunningInEmacs()) {
       // The syntax of this message is tightly constrained by lisp/progmodes/compile.el in emacs
-      request.getOutErr().printErrLn("blaze: Entering directory `" + getExecRoot() + "/'");
+      request
+          .getOutErr()
+          .printErrLn(
+              env.getRuntime().getProductName() + ": Entering directory `" + getExecRoot() + "/'");
     }
     boolean buildCompleted = false;
     try {
@@ -444,7 +468,10 @@ public class ExecutionTool {
     } finally {
       env.recordLastExecutionTime();
       if (request.isRunningInEmacs()) {
-        request.getOutErr().printErrLn("blaze: Leaving directory `" + getExecRoot() + "/'");
+        request
+            .getOutErr()
+            .printErrLn(
+                env.getRuntime().getProductName() + ": Leaving directory `" + getExecRoot() + "/'");
       }
       if (buildCompleted) {
         getReporter().handle(Event.progress("Building complete."));
@@ -462,7 +489,7 @@ public class ExecutionTool {
       Profiler.instance().markPhase(ProfilePhase.FINISH);
 
       if (buildCompleted) {
-        saveCaches(actionCache);
+        saveActionCache(actionCache);
       }
 
       try (AutoProfiler p = AutoProfiler.profiled("Show results", ProfilerTask.INFO)) {
@@ -495,15 +522,19 @@ public class ExecutionTool {
     }
   }
 
-  private void prepare(ImmutableMap<PackageIdentifier, Path> packageRoots)
-      throws ExecutorInitException {
+  private void prepare(PackageRoots packageRoots) throws ExecutorInitException {
+    Optional<ImmutableMap<PackageIdentifier, Path>> packageRootMap =
+        packageRoots.getPackageRootsMap();
+    if (!packageRootMap.isPresent()) {
+      return;
+    }
     // Prepare for build.
     Profiler.instance().markPhase(ProfilePhase.PREPARE);
 
     // Plant the symlink forest.
     try {
       new SymlinkForest(
-          packageRoots, getExecRoot(), runtime.getProductName(), env.getWorkspaceName())
+              packageRootMap.get(), getExecRoot(), runtime.getProductName(), env.getWorkspaceName())
           .plantSymlinkForest();
     } catch (IOException e) {
       throw new ExecutorInitException("Source forest creation failed", e);
@@ -598,7 +629,7 @@ public class ExecutionTool {
     private final PrintWriter log;
 
     private ExplanationHandler(OutputStream log, String optionsDescription) {
-      this.log = new PrintWriter(log);
+      this.log = new PrintWriter(new OutputStreamWriter(log, StandardCharsets.UTF_8));
       this.log.println("Build options: " + optionsDescription);
     }
 
@@ -709,24 +740,26 @@ public class ExecutionTool {
   }
 
   /**
-   * Writes the cache files to disk, reporting any errors that occurred during
-   * writing.
+   * Writes the action cache files to disk, reporting any errors that occurred during writing and
+   * capturing statistics.
    */
-  private void saveCaches(ActionCache actionCache) {
-    long actionCacheSizeInBytes = 0;
-    long actionCacheSaveTimeInMs;
+  private void saveActionCache(ActionCache actionCache) {
+    ActionCacheStatistics.Builder builder = ActionCacheStatistics.newBuilder();
+    actionCache.mergeIntoActionCacheStatistics(builder);
 
-    AutoProfiler p = AutoProfiler.profiledAndLogged("Saving action cache", ProfilerTask.INFO, log);
+    AutoProfiler p =
+        AutoProfiler.profiledAndLogged("Saving action cache", ProfilerTask.INFO, logger);
     try {
-      actionCacheSizeInBytes = actionCache.save();
+      builder.setSizeInBytes(actionCache.save());
     } catch (IOException e) {
+      builder.setSizeInBytes(0);
       getReporter().handle(Event.error("I/O error while writing action log: " + e.getMessage()));
     } finally {
-      actionCacheSaveTimeInMs =
-          MILLISECONDS.convert(p.completeAndGetElapsedTimeNanos(), NANOSECONDS);
+      builder.setSaveTimeInMs(
+          TimeUnit.MILLISECONDS.convert(p.completeAndGetElapsedTimeNanos(), TimeUnit.NANOSECONDS));
     }
-    env.getEventBus().post(new CachesSavedEvent(
-        actionCacheSaveTimeInMs, actionCacheSizeInBytes));
+
+    env.getEventBus().post(builder.build());
   }
 
   private Reporter getReporter() {

@@ -14,11 +14,22 @@
 
 package com.google.devtools.build.lib.rules.platform;
 
+import static com.google.common.truth.Truth.assertThat;
+
+import com.google.common.collect.ImmutableList;
+import com.google.common.truth.IterableSubject;
 import com.google.devtools.build.lib.analysis.platform.ConstraintSettingInfo;
 import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
+import com.google.devtools.build.lib.analysis.platform.DeclaredToolchainInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.skyframe.RegisteredToolchainsValue;
+import com.google.devtools.build.lib.skyframe.util.SkyframeExecutorTestUtils;
 import com.google.devtools.build.lib.skylark.util.SkylarkTestCase;
+import com.google.devtools.build.skyframe.EvaluationResult;
+import com.google.devtools.build.skyframe.SkyKey;
+import java.util.List;
+import java.util.stream.Collectors;
 import org.junit.Before;
 
 /** Utility methods for setting up platform and toolchain related tests. */
@@ -33,6 +44,22 @@ public abstract class ToolchainTestCase extends SkylarkTestCase {
 
   public Label testToolchainType;
 
+  protected static IterableSubject assertToolchainLabels(
+      RegisteredToolchainsValue registeredToolchainsValue) {
+    assertThat(registeredToolchainsValue).isNotNull();
+    ImmutableList<DeclaredToolchainInfo> declaredToolchains =
+        registeredToolchainsValue.registeredToolchains();
+    List<Label> labels = collectToolchainLabels(declaredToolchains);
+    return assertThat(labels);
+  }
+
+  protected static List<Label> collectToolchainLabels(List<DeclaredToolchainInfo> toolchains) {
+    return toolchains
+        .stream()
+        .map((toolchain -> toolchain.toolchainLabel()))
+        .collect(Collectors.toList());
+  }
+
   @Before
   public void createConstraints() throws Exception {
     scratch.file(
@@ -41,7 +68,11 @@ public abstract class ToolchainTestCase extends SkylarkTestCase {
         "constraint_value(name = 'linux',",
         "    constraint_setting = ':os')",
         "constraint_value(name = 'mac',",
-        "    constraint_setting = ':os')");
+        "    constraint_setting = ':os')",
+        "platform(name = 'linux_plat',",
+        "    constraint_values = [':linux'])",
+        "platform(name = 'mac_plat',",
+        "    constraint_values = [':mac'])");
 
     setting = ConstraintSettingInfo.create(makeLabel("//constraint:os"));
     linuxConstraint = ConstraintValueInfo.create(setting, makeLabel("//constraint:linux"));
@@ -89,7 +120,6 @@ public abstract class ToolchainTestCase extends SkylarkTestCase {
         "toolchain/toolchain_def.bzl",
         "def _impl(ctx):",
         "  toolchain = platform_common.ToolchainInfo(",
-        "      type = Label('//toolchain:test_toolchain'),",
         "      data = ctx.attr.data)",
         "  return [toolchain]",
         "test_toolchain = rule(",
@@ -98,5 +128,16 @@ public abstract class ToolchainTestCase extends SkylarkTestCase {
         "       'data': attr.string()})");
 
     testToolchainType = makeLabel("//toolchain:test_toolchain");
+  }
+
+  protected EvaluationResult<RegisteredToolchainsValue> requestToolchainsFromSkyframe(
+      SkyKey toolchainsKey) throws InterruptedException {
+    try {
+      getSkyframeExecutor().getSkyframeBuildView().enableAnalysis(true);
+      return SkyframeExecutorTestUtils.evaluate(
+          getSkyframeExecutor(), toolchainsKey, /*keepGoing=*/ false, reporter);
+    } finally {
+      getSkyframeExecutor().getSkyframeBuildView().enableAnalysis(false);
+    }
   }
 }

@@ -21,10 +21,12 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.devtools.build.lib.events.Location;
 import com.google.devtools.build.lib.skylarkinterface.Param;
+import com.google.devtools.build.lib.skylarkinterface.ParamType;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkCallable;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkInterfaceUtils;
 import com.google.devtools.build.lib.skylarkinterface.SkylarkModule;
@@ -38,6 +40,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -137,7 +140,8 @@ public final class FuncallExpression extends Expression {
    */
   public static ImmutableMap<Method, SkylarkCallable> collectSkylarkMethodsWithAnnotation(
       Class<?> classObj) {
-    ImmutableMap.Builder<Method, SkylarkCallable> methodMap = ImmutableMap.builder();
+    ImmutableSortedMap.Builder<Method, SkylarkCallable> methodMap
+        = ImmutableSortedMap.orderedBy(Comparator.comparing(Object::toString));
     for (Method method : classObj.getMethods()) {
       // Synthetic methods lead to false multiple matches
       if (!method.isSynthetic()) {
@@ -186,24 +190,21 @@ public final class FuncallExpression extends Expression {
     }
   }
 
-  @Nullable private final Expression object;
+  private final Expression function;
 
-  private final Identifier function;
-
-  private final List<Argument.Passed> arguments;
+  private final ImmutableList<Argument.Passed> arguments;
 
   private final int numPositionalArgs;
 
-  public FuncallExpression(@Nullable Expression object, Identifier function,
-                           List<Argument.Passed> arguments) {
-    this.object = object;
-    this.function = function;
-    this.arguments = arguments;
+  public FuncallExpression(Expression function, ImmutableList<Argument.Passed> arguments) {
+    this.function = Preconditions.checkNotNull(function);
+    this.arguments = Preconditions.checkNotNull(arguments);
     this.numPositionalArgs = countPositionalArguments();
   }
 
-  public FuncallExpression(Identifier function, List<Argument.Passed> arguments) {
-    this(null, function, arguments);
+  /** Returns the function that is called. */
+  public Expression getFunction() {
+    return this.function;
   }
 
   /**
@@ -217,22 +218,6 @@ public final class FuncallExpression extends Expression {
       }
     }
     return num;
-  }
-
-  /**
-   * Returns the function expression.
-   */
-  public Identifier getFunction() {
-    return function;
-  }
-
-  /**
-   * Returns the object the function called on.
-   * It's null if the function is not called on an object.
-   */
-  @Nullable
-  public Expression getObject() {
-    return object;
   }
 
   /**
@@ -254,10 +239,6 @@ public final class FuncallExpression extends Expression {
 
    @Override
    public void prettyPrint(Appendable buffer) throws IOException {
-     if (object != null) {
-       object.prettyPrint(buffer);
-       buffer.append('.');
-     }
      function.prettyPrint(buffer);
      buffer.append('(');
      String sep = "";
@@ -272,9 +253,6 @@ public final class FuncallExpression extends Expression {
   @Override
   public String toString() {
     Printer.LengthLimitedPrinter printer = new Printer.LengthLimitedPrinter();
-    if (object != null) {
-      printer.append(object.toString()).append(".");
-    }
     printer.append(function.toString());
     printer.printAbbreviatedList(arguments, "(", ", ", ")", null,
         Printer.SUGGESTED_CRITICAL_LIST_ELEMENTS_COUNT,
@@ -381,7 +359,8 @@ public final class FuncallExpression extends Expression {
                   getLocation(),
                   String.format(
                       "type '%s' has multiple matches for function %s",
-                      EvalUtils.getDataTypeNameFromClass(objClass), formatMethod(args, kwargs)));
+                      EvalUtils.getDataTypeNameFromClass(objClass),
+                      formatMethod(methodName, args, kwargs)));
             }
           }
         }
@@ -396,14 +375,15 @@ public final class FuncallExpression extends Expression {
         errorMessage =
             String.format(
                 "type '%s' has no method %s",
-                EvalUtils.getDataTypeNameFromClass(objClass), formatMethod(args, kwargs));
+                EvalUtils.getDataTypeNameFromClass(objClass),
+                formatMethod(methodName, args, kwargs));
 
       } else {
         errorMessage =
             String.format(
                 "%s, in method %s of '%s'",
                 argumentListConversionResult.getError(),
-                formatMethod(args, kwargs),
+                formatMethod(methodName, args, kwargs),
                 EvalUtils.getDataTypeNameFromClass(objClass));
       }
       throw new EvalException(getLocation(), errorMessage);
@@ -412,11 +392,24 @@ public final class FuncallExpression extends Expression {
   }
 
   private static SkylarkType getType(Param param) {
-    SkylarkType type =
-        param.generic1() != Object.class
-            ? SkylarkType.of(param.type(), param.generic1())
-            : SkylarkType.of(param.type());
-    return type;
+    if (param.allowedTypes().length > 0) {
+      Preconditions.checkState(Object.class.equals(param.type()));
+      SkylarkType result = SkylarkType.BOTTOM;
+      for (ParamType paramType : param.allowedTypes()) {
+        SkylarkType t =
+            paramType.generic1() != Object.class
+                ? SkylarkType.of(paramType.type(), paramType.generic1())
+                : SkylarkType.of(paramType.type());
+        result = SkylarkType.Union.of(result, t);
+      }
+      return result;
+    } else {
+      SkylarkType type =
+          param.generic1() != Object.class
+              ? SkylarkType.of(param.type(), param.generic1())
+              : SkylarkType.of(param.type());
+      return type;
+    }
   }
 
   /**
@@ -513,9 +506,9 @@ public final class FuncallExpression extends Expression {
     return ArgumentListConversionResult.fromArgumentList(builder.build());
   }
 
-  private String formatMethod(List<Object> args, Map<String, Object> kwargs) {
+  private static String formatMethod(String name, List<Object> args, Map<String, Object> kwargs) {
     StringBuilder sb = new StringBuilder();
-    sb.append(function.getName()).append("(");
+    sb.append(name).append("(");
     boolean first = true;
     for (Object obj : args) {
       if (!first) {
@@ -538,10 +531,8 @@ public final class FuncallExpression extends Expression {
 
   /**
    * Add one argument to the keyword map, registering a duplicate in case of conflict.
-   *
-   * <p>public for reflection by the compiler and calls from compiled functions
    */
-  public static void addKeywordArg(
+  private static void addKeywordArg(
       Map<String, Object> kwargs,
       String name,
       Object value,
@@ -553,10 +544,8 @@ public final class FuncallExpression extends Expression {
 
   /**
    * Add multiple arguments to the keyword map (**kwargs), registering duplicates
-   *
-   * <p>public for reflection by the compiler and calls from compiled functions
    */
-  public static void addKeywordArgs(
+  private static void addKeywordArgs(
       Map<String, Object> kwargs,
       Object items,
       ImmutableList.Builder<String> duplicates,
@@ -580,11 +569,9 @@ public final class FuncallExpression extends Expression {
   /**
    * Checks whether the given object is a {@link BaseFunction}.
    *
-   * <p>Public for reflection by the compiler and access from generated byte code.
-   *
    * @throws EvalException If not a BaseFunction.
    */
-  public static BaseFunction checkCallable(Object functionValue, Location location)
+  private static BaseFunction checkCallable(Object functionValue, Location location)
       throws EvalException {
     if (functionValue instanceof BaseFunction) {
       return (BaseFunction) functionValue;
@@ -596,11 +583,9 @@ public final class FuncallExpression extends Expression {
 
   /**
    * Check the list from the builder and report an {@link EvalException} if not empty.
-   *
-   * <p>public for reflection by the compiler and calls from compiled functions
    */
-  public static void checkDuplicates(
-      ImmutableList.Builder<String> duplicates, String function, Location location)
+  private static void checkDuplicates(
+      ImmutableList.Builder<String> duplicates, Expression function, Location location)
       throws EvalException {
     List<String> dups = duplicates.build();
     if (!dups.isEmpty()) {
@@ -618,12 +603,10 @@ public final class FuncallExpression extends Expression {
   /**
    * Call a method depending on the type of an object it is called on.
    *
-   * <p>Public for reflection by the compiler and access from generated byte code.
-   *
    * @param positionals The first object is expected to be the object the method is called on.
    * @param call the original expression that caused this call, needed for rules especially
    */
-  public Object invokeObjectMethod(
+  private Object invokeObjectMethod(
       String method,
       ImmutableList<Object> positionals,
       ImmutableMap<String, Object> keyWordArgs,
@@ -696,7 +679,10 @@ public final class FuncallExpression extends Expression {
     // or star arguments, because the argument list was already validated by
     // Argument#validateFuncallArguments, as called by the Parser,
     // which should be the only place that build FuncallExpression-s.
-    for (Argument.Passed arg : arguments) {
+    // Argument lists are typically short and functions are frequently called, so go by index
+    // (O(1) for ImmutableList) to avoid the iterator overhead.
+    for (int i = 0; i < arguments.size(); i++) {
+      Argument.Passed arg = arguments.get(i);
       Object value = arg.getValue().eval(env);
       if (arg.isPositional()) {
         posargs.add(value);
@@ -713,7 +699,7 @@ public final class FuncallExpression extends Expression {
         addKeywordArg(kwargs, arg.getName(), value, duplicates);
       }
     }
-    checkDuplicates(duplicates, function.getName(), getLocation());
+    checkDuplicates(duplicates, function, getLocation());
   }
 
   @VisibleForTesting
@@ -724,14 +710,19 @@ public final class FuncallExpression extends Expression {
 
   @Override
   Object doEval(Environment env) throws EvalException, InterruptedException {
-    return (object != null) ? invokeObjectMethod(env) : invokeGlobalFunction(env);
+    // TODO: Remove this special case once method resolution and invocation are supported as
+    // separate steps.
+    if (function instanceof DotExpression) {
+      return invokeObjectMethod(env, (DotExpression) function);
+    }
+    Object funcValue = function.eval(env);
+    return callFunction(funcValue, env);
   }
 
-  /**
-   * Invokes object.function() and returns the result.
-   */
-  private Object invokeObjectMethod(Environment env) throws EvalException, InterruptedException {
-    Object objValue = object.eval(env);
+  /** Invokes object.function() and returns the result. */
+  private Object invokeObjectMethod(Environment env, DotExpression dot)
+      throws EvalException, InterruptedException {
+    Object objValue = dot.getObject().eval(env);
     ImmutableList.Builder<Object> posargs = new ImmutableList.Builder<>();
     posargs.add(objValue);
     // We copy this into an ImmutableMap in the end, but we can't use an ImmutableMap.Builder, or
@@ -739,15 +730,7 @@ public final class FuncallExpression extends Expression {
     Map<String, Object> kwargs = new LinkedHashMap<>();
     evalArguments(posargs, kwargs, env);
     return invokeObjectMethod(
-        function.getName(), posargs.build(), ImmutableMap.copyOf(kwargs), this, env);
-  }
-
-  /**
-   * Invokes function() and returns the result.
-   */
-  private Object invokeGlobalFunction(Environment env) throws EvalException, InterruptedException {
-    Object funcValue = function.eval(env);
-    return callFunction(funcValue, env);
+        dot.getField().getName(), posargs.build(), ImmutableMap.copyOf(kwargs), this, env);
   }
 
   /**
@@ -788,15 +771,8 @@ public final class FuncallExpression extends Expression {
   }
 
   @Override
-  void validate(ValidationEnvironment env) throws EvalException {
-    if (object != null) {
-      object.validate(env);
-    } else {
-      function.validate(env);
-    }
-    for (Argument.Passed arg : arguments) {
-      arg.getValue().validate(env);
-    }
+  public Kind kind() {
+    return Kind.FUNCALL;
   }
 
   @Override

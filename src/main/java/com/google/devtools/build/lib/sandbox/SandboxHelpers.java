@@ -20,14 +20,11 @@ import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.Artifact.ArtifactExpander;
-import com.google.devtools.build.lib.actions.ExecException;
 import com.google.devtools.build.lib.actions.Spawn;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.test.TestConfiguration;
 import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionPolicy;
 import com.google.devtools.build.lib.rules.fileset.FilesetActionContext;
-import com.google.devtools.build.lib.standalone.StandaloneSpawnStrategy;
-import com.google.devtools.build.lib.util.Preconditions;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.common.options.OptionsProvider;
@@ -39,15 +36,6 @@ import java.util.TreeMap;
 
 /** Helper methods that are shared by the different sandboxing strategies in this package. */
 public final class SandboxHelpers {
-
-  static void fallbackToNonSandboxedExecution(
-      Spawn spawn, ActionExecutionContext actionExecutionContext)
-      throws ExecException, InterruptedException {
-    StandaloneSpawnStrategy standaloneStrategy =
-        Preconditions.checkNotNull(
-            actionExecutionContext.getContext(StandaloneSpawnStrategy.class));
-    standaloneStrategy.exec(spawn, actionExecutionContext);
-  }
 
   /**
    * Returns the inputs of a Spawn as a map of PathFragments relative to an execRoot to paths in the
@@ -136,7 +124,7 @@ public final class SandboxHelpers {
     // remote debug server of the test. This intentionally overrides the "block-network" execution
     // tag.
     return buildOptions
-        .getOptions(BuildConfiguration.Options.class)
+        .getOptions(TestConfiguration.TestOptions.class)
         .testArguments
         .contains("--wrapper_script_flag=--debug");
   }

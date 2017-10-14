@@ -254,8 +254,8 @@ public class ResourceShrinkerAction {
     optionsParser.parseAndExitUponError(args);
     aaptConfigOptions = optionsParser.getOptions(AaptConfigOptions.class);
     options = optionsParser.getOptions(Options.class);
-    options.dependencyManifests = PathListConverter.concatLists(
-        options.dependencyManifests, options.deprecatedDependencyManifests);
+    options.dependencyManifests =
+        Converters.concatLists(options.dependencyManifests, options.deprecatedDependencyManifests);
 
     AndroidResourceProcessor resourceProcessor = new AndroidResourceProcessor(stdLogger);
     // Setup temporary working directories.
@@ -327,11 +327,8 @@ public class ResourceShrinkerAction {
           null /* publicResourcesOut */,
           null /* dataBindingInfoOut */);
       if (options.shrunkResources != null) {
-        AndroidResourceOutputs.createResourcesZip(
-            shrunkResources,
-            resourceFiles.resolve("assets"),
-            options.shrunkResources,
-            false /* compress */);
+        ResourcesZip.from(shrunkResources, resourceFiles.resolve("assets"))
+            .writeTo(options.shrunkResources, false /* compress */);
       }
       if (options.rTxtOutput != null) {
         AndroidResourceOutputs.copyRToOutput(

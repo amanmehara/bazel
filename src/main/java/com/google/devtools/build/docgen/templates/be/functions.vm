@@ -335,19 +335,20 @@ package_group(
 
 <p>Legal license types include:</p>
 <dl>
-<dt><code>restricted</code></dt><dd>Requires mandatory source distribution.</dd>
-<dt><code>reciprocal</code></dt><dd>Allows usage of software freely in
-<b>unmodified</b> form. Any modifications must be made freely available.</dd>
-<dt><code>notice</code></dt><dd>Original or modified third-party software may be
-shipped without danger nor encumbering other sources. All of the licenses in this
-category do, however, have an \"original Copyright notice\" or
-\"advertising clause\", wherein any external distributions must include the notice
-or clause specified in the license.</dd>
-<dt><code>permissive</code></dt><dd>Code that is under a license but does not
-require a notice.</dd>
-<dt><code>unencumbered</code></dt><dd>Public domain, free for any use.</dd>
+  <dt><code>restricted</code></dt><dd>Requires mandatory source
+    distribution.</dd>
+  <dt><code>reciprocal</code></dt><dd>Allows usage of software freely in
+    <b>unmodified</b> form. Any modifications must be made freely
+    available.</dd>
+  <dt><code>notice</code></dt><dd>Original or modified third-party software may
+    be shipped without danger nor encumbering other sources. All of the
+    licenses in this category do, however, have an "original Copyright notice"
+    or "advertising clause", wherein any external distributions must include
+    the notice or clause specified in the license.</dd>
+  <dt><code>permissive</code></dt><dd>Code that is under a license but does not
+    require a notice.</dd>
+  <dt><code>unencumbered</code></dt><dd>Public domain, free for any use.</dd>
 </dl>
-
 licenses(["notice"])  # MIT license
 
 exports_files(["jquery-2.1.1.js"])
@@ -473,7 +474,7 @@ There are several important limitations and caveats:
     existence of BUILD files &mdash; that is, the same glob expression would
     include <code>x/y/z.cc</code> if there was no package called
     <code>x/y</code> or it was marked as deleted using the
-    <a href="../bazel-user-manual.html#flag--deleted_packages">--deleted_packages</a>
+    <a href="../user-manual.html#flag--deleted_packages">--deleted_packages</a>
     flag.
 
   </li>
@@ -554,7 +555,8 @@ sh_test(
 <p>Create a library built from all java files in this directory and all
 subdirectories except those whose path includes a directory named testing.
 Subdirectories containing a BUILD file are ignored.
-<b>This should be a very common pattern.</b>
+<b>This pattern should be avoided if possible, as it can reduce build
+incrementality and therefore increase build times.</b>
 </p>
 <pre class="code">
 java_library(

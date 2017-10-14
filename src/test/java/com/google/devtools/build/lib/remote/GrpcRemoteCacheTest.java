@@ -28,6 +28,7 @@ import com.google.bytestream.ByteStreamProto.WriteResponse;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
 import com.google.devtools.build.lib.authandtls.AuthAndTLSOptions;
+import com.google.devtools.build.lib.authandtls.GrpcUtils;
 import com.google.devtools.build.lib.remote.Digests.ActionKey;
 import com.google.devtools.build.lib.testutil.Scratch;
 import com.google.devtools.build.lib.util.io.FileOutErr;
@@ -37,6 +38,7 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.common.options.Options;
+import com.google.devtools.remoteexecution.v1test.Action;
 import com.google.devtools.remoteexecution.v1test.ActionCacheGrpc.ActionCacheImplBase;
 import com.google.devtools.remoteexecution.v1test.ActionResult;
 import com.google.devtools.remoteexecution.v1test.ContentAddressableStorageGrpc.ContentAddressableStorageImplBase;
@@ -46,11 +48,13 @@ import com.google.devtools.remoteexecution.v1test.FindMissingBlobsResponse;
 import com.google.devtools.remoteexecution.v1test.GetActionResultRequest;
 import com.google.devtools.remoteexecution.v1test.UpdateActionResultRequest;
 import com.google.protobuf.ByteString;
+import io.grpc.CallCredentials;
 import io.grpc.CallOptions;
 import io.grpc.Channel;
 import io.grpc.ClientCall;
 import io.grpc.ClientInterceptor;
 import io.grpc.ClientInterceptors;
+import io.grpc.Context;
 import io.grpc.MethodDescriptor;
 import io.grpc.Server;
 import io.grpc.Status;
@@ -59,7 +63,6 @@ import io.grpc.inprocess.InProcessServerBuilder;
 import io.grpc.stub.StreamObserver;
 import io.grpc.util.MutableHandlerRegistry;
 import java.io.IOException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -101,6 +104,10 @@ public class GrpcRemoteCacheTest {
     FileSystemUtils.createDirectoryAndParents(stdout.getParentDirectory());
     FileSystemUtils.createDirectoryAndParents(stderr.getParentDirectory());
     outErr = new FileOutErr(stdout, stderr);
+    Context withEmptyMetadata =
+        TracingMetadataUtils.contextWithMetadata(
+            "none", "none", Digests.unsafeActionKeyFromDigest(Digest.getDefaultInstance()));
+    withEmptyMetadata.attach();
   }
 
   @After
@@ -108,17 +115,17 @@ public class GrpcRemoteCacheTest {
     fakeServer.shutdownNow();
   }
 
-  private static class ChannelOptionsInterceptor implements ClientInterceptor {
-    private final ChannelOptions channelOptions;
+  private static class CallCredentialsInterceptor implements ClientInterceptor {
+    private final CallCredentials credentials;
 
-    public ChannelOptionsInterceptor(ChannelOptions channelOptions) {
-      this.channelOptions = channelOptions;
+    public CallCredentialsInterceptor(CallCredentials credentials) {
+      this.credentials = credentials;
     }
 
     @Override
     public <RequestT, ResponseT> ClientCall<RequestT, ResponseT> interceptCall(
         MethodDescriptor<RequestT, ResponseT> method, CallOptions callOptions, Channel next) {
-      assertThat(callOptions.getCredentials()).isEqualTo(channelOptions.getCallCredentials());
+      assertThat(callOptions.getCredentials()).isEqualTo(credentials);
       // Remove the call credentials to allow testing with dummy ones.
       return next.newCall(method, callOptions.withCallCredentials(null));
     }
@@ -138,16 +145,16 @@ public class GrpcRemoteCacheTest {
     Scratch scratch = new Scratch();
     scratch.file(authTlsOptions.authCredentials, new JacksonFactory().toString(json));
 
-    ChannelOptions channelOptions =
-        ChannelOptions.create(
-            authTlsOptions, scratch.resolve(authTlsOptions.authCredentials).getInputStream());
+    CallCredentials creds = GrpcUtils.newCallCredentials(
+        scratch.resolve(authTlsOptions.authCredentials).getInputStream(),
+        authTlsOptions.authScope);
     RemoteOptions remoteOptions = Options.getDefaults(RemoteOptions.class);
     Retrier retrier = new Retrier(remoteOptions);
     return new GrpcRemoteCache(
         ClientInterceptors.intercept(
             InProcessChannelBuilder.forName(fakeServerName).directExecutor().build(),
-            ImmutableList.of(new ChannelOptionsInterceptor(channelOptions))),
-        channelOptions,
+            ImmutableList.of(new CallCredentialsInterceptor(creds))),
+        creds,
         remoteOptions,
         retrier);
   }
@@ -285,49 +292,6 @@ public class GrpcRemoteCacheTest {
     assertThat(client.uploadBlob("abcdefg".getBytes(UTF_8))).isEqualTo(digest);
   }
 
-  @Test
-  public void testUploadBlobRemoteAlreadyExists() throws Exception {
-    final GrpcRemoteCache client = newClient();
-    final Digest digest = Digests.computeDigestUtf8("abcdefg");
-    serviceRegistry.addService(
-        new ContentAddressableStorageImplBase() {
-          @Override
-          public void findMissingBlobs(
-              FindMissingBlobsRequest request,
-              StreamObserver<FindMissingBlobsResponse> responseObserver) {
-            responseObserver.onNext(
-                FindMissingBlobsResponse.newBuilder().addMissingBlobDigests(digest).build());
-            responseObserver.onCompleted();
-          }
-        });
-    final AtomicBoolean sentError = new AtomicBoolean(false);
-    serviceRegistry.addService(
-        new ByteStreamImplBase() {
-          @Override
-          public StreamObserver<WriteRequest> write(
-              final StreamObserver<WriteResponse> responseObserver) {
-            return new StreamObserver<WriteRequest>() {
-              @Override
-              public void onNext(WriteRequest request) {
-                responseObserver.onError(Status.ALREADY_EXISTS.asRuntimeException());
-                sentError.set(true);
-              }
-
-              @Override
-              public void onCompleted() {
-              }
-
-              @Override
-              public void onError(Throwable t) {
-                fail("An error occurred: " + t);
-              }
-            };
-          }
-        });
-    assertThat(client.uploadBlob("abcdefg".getBytes(UTF_8))).isEqualTo(digest);
-    assertThat(sentError.get()).isTrue();
-  }
-
   static class TestChunkedRequestObserver implements StreamObserver<WriteRequest> {
     private final StreamObserver<WriteResponse> responseObserver;
     private final String contents;
@@ -455,6 +419,40 @@ public class GrpcRemoteCacheTest {
   }
 
   @Test
+  public void testUploadUploadsOnlyOutputs() throws Exception {
+    final GrpcRemoteCache client = newClient();
+    final Digest fooDigest =
+        fakeFileCache.createScratchInput(ActionInputHelper.fromPath("a/foo"), "xyz");
+    final Digest barDigest =
+        fakeFileCache.createScratchInput(ActionInputHelper.fromPath("bar"), "x");
+    serviceRegistry.addService(
+        new ContentAddressableStorageImplBase() {
+          @Override
+          public void findMissingBlobs(
+              FindMissingBlobsRequest request,
+              StreamObserver<FindMissingBlobsResponse> responseObserver) {
+            // This checks we will try to upload the actual outputs.
+            assertThat(request.getBlobDigestsList()).containsExactly(fooDigest, barDigest);
+            responseObserver.onNext(FindMissingBlobsResponse.getDefaultInstance());
+            responseObserver.onCompleted();
+          }
+        });
+    serviceRegistry.addService(
+        new ActionCacheImplBase() {
+          @Override
+          public void updateActionResult(
+              UpdateActionResultRequest request, StreamObserver<ActionResult> responseObserver) {
+            fail("Update action result was expected to not be called.");
+          }
+        });
+
+    ActionKey emptyKey = Digests.computeActionKey(Action.getDefaultInstance());
+    Path fooFile = execRoot.getRelative("a/foo");
+    Path barFile = execRoot.getRelative("bar");
+    client.upload(emptyKey, execRoot, ImmutableList.<Path>of(fooFile, barFile), outErr, false);
+  }
+
+  @Test
   public void testUploadCacheMissesWithRetries() throws Exception {
     final GrpcRemoteCache client = newClient();
     final Digest fooDigest =
@@ -568,7 +566,8 @@ public class GrpcRemoteCacheTest {
                 };
               }
             });
-    client.upload(actionKey, execRoot, ImmutableList.<Path>of(fooFile, barFile, bazFile), outErr);
+    client.upload(
+        actionKey, execRoot, ImmutableList.<Path>of(fooFile, barFile, bazFile), outErr, true);
     // 4 times for the errors, 3 times for the successful uploads.
     Mockito.verify(mockByteStreamImpl, Mockito.times(7))
         .write(Mockito.<StreamObserver<WriteResponse>>anyObject());
